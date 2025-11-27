@@ -86,7 +86,7 @@ from .utils import (
     AgentParsingError,
     AgentToolCallError,
     AgentToolExecutionError,
-    create_agent_gradio_app_template,
+    create_agent_streamlit_app_template,
     extract_code_from_text,
     is_valid_name,
     make_init_file,
@@ -308,9 +308,16 @@ class MultiStepAgent(ABC):
         final_answer_checks: list[Callable] | None = None,
         return_full_result: bool = False,
         logger: AgentLogger | None = None,
+        planning_model: Model | None = None,
+        action_model: Model | None = None,
+        final_answer_model: Model | None = None,
     ):
         self.agent_name = self.__class__.__name__
         self.model = model
+        # Support per-step model selection, defaulting to main model for backward compatibility
+        self.planning_model = planning_model if planning_model is not None else model
+        self.action_model = action_model if action_model is not None else model
+        self.final_answer_model = final_answer_model if final_answer_model is not None else model
         self.prompt_templates = prompt_templates or EMPTY_PROMPT_TEMPLATES
         if prompt_templates is not None:
             missing_keys = set(EMPTY_PROMPT_TEMPLATES.keys()) - set(prompt_templates.keys())
@@ -651,9 +658,9 @@ You have been provided with these additional arguments, that you can access dire
                     ],
                 )
             ]
-            if self.stream_outputs and hasattr(self.model, "generate_stream"):
+            if self.stream_outputs and hasattr(self.planning_model, "generate_stream"):
                 plan_message_content = ""
-                output_stream = self.model.generate_stream(input_messages, stop_sequences=["<end_plan>"])  # type: ignore
+                output_stream = self.planning_model.generate_stream(input_messages, stop_sequences=["<end_plan>"])  # type: ignore
                 input_tokens, output_tokens = 0, 0
                 with Live("", console=self.logger.console, vertical_overflow="visible") as live:
                     for event in output_stream:
@@ -665,7 +672,7 @@ You have been provided with these additional arguments, that you can access dire
                                 output_tokens += event.token_usage.output_tokens
                         yield event
             else:
-                plan_message = self.model.generate(input_messages, stop_sequences=["<end_plan>"])
+                plan_message = self.planning_model.generate(input_messages, stop_sequences=["<end_plan>"])
                 plan_message_content = plan_message.content
                 input_tokens, output_tokens = 0, 0
                 if plan_message.token_usage:
@@ -707,11 +714,11 @@ You have been provided with these additional arguments, that you can access dire
                 ],
             )
             input_messages = [plan_update_pre] + memory_messages + [plan_update_post]
-            if self.stream_outputs and hasattr(self.model, "generate_stream"):
+            if self.stream_outputs and hasattr(self.planning_model, "generate_stream"):
                 plan_message_content = ""
                 input_tokens, output_tokens = 0, 0
                 with Live("", console=self.logger.console, vertical_overflow="visible") as live:
-                    for event in self.model.generate_stream(
+                    for event in self.planning_model.generate_stream(
                         input_messages,
                         stop_sequences=["<end_plan>"],
                     ):  # type: ignore
@@ -723,7 +730,7 @@ You have been provided with these additional arguments, that you can access dire
                                 output_tokens += event.token_usage.output_tokens
                         yield event
             else:
-                plan_message = self.model.generate(input_messages, stop_sequences=["<end_plan>"])
+                plan_message = self.planning_model.generate(input_messages, stop_sequences=["<end_plan>"])
                 plan_message_content = plan_message.content
                 input_tokens, output_tokens = 0, 0
                 if plan_message.token_usage:
@@ -840,7 +847,7 @@ You have been provided with these additional arguments, that you can access dire
             )
         )
         try:
-            chat_message: ChatMessage = self.model.generate(messages)
+            chat_message: ChatMessage = self.final_answer_model.generate(messages)
             return chat_message
         except Exception as e:
             return ChatMessage(
@@ -916,7 +923,7 @@ You have been provided with these additional arguments, that you can access dire
         # Save tools to different .py files
         for tool in self.tools.values():
             make_init_file(os.path.join(output_dir, "tools"))
-            tool.save(os.path.join(output_dir, "tools"), tool_file_name=tool.name, make_gradio_app=False)
+            tool.save(os.path.join(output_dir, "tools"), tool_file_name=tool.name, make_streamlit_app=False)
 
         # Save prompts to yaml
         yaml_prompts = yaml.safe_dump(
@@ -943,10 +950,10 @@ You have been provided with these additional arguments, that you can access dire
         with open(os.path.join(output_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.writelines(f"{r}\n" for r in agent_dict["requirements"])
 
-        # Make agent.py file with Gradio UI
+        # Make agent.py file with Streamlit UI
         agent_name = f"agent_{self.name}" if getattr(self, "name", None) else "agent"
         managed_agent_relative_path = relative_path + "." if relative_path is not None else ""
-        app_template = create_agent_gradio_app_template()
+        app_template = create_agent_streamlit_app_template()
 
         # Render the app.py file from Jinja2 template
         app_text = app_template.render(
@@ -1001,6 +1008,22 @@ You have been provided with these additional arguments, that you can access dire
             "description": self.description,
             "requirements": sorted(requirements),
         }
+        # Include per-step model configurations if they differ from main model
+        if self.planning_model != self.model:
+            agent_dict["planning_model"] = {
+                "class": self.planning_model.__class__.__name__,
+                "data": self.planning_model.to_dict(),
+            }
+        if self.action_model != self.model:
+            agent_dict["action_model"] = {
+                "class": self.action_model.__class__.__name__,
+                "data": self.action_model.to_dict(),
+            }
+        if self.final_answer_model != self.model:
+            agent_dict["final_answer_model"] = {
+                "class": self.final_answer_model.__class__.__name__,
+                "data": self.final_answer_model.to_dict(),
+            }
         return agent_dict
 
     @classmethod
@@ -1018,6 +1041,22 @@ You have been provided with these additional arguments, that you can access dire
         model_info = agent_dict["model"]
         model_class = getattr(importlib.import_module("smolagents.models"), model_info["class"])
         model = model_class.from_dict(model_info["data"])
+        # Load per-step models if they exist
+        planning_model = None
+        action_model = None
+        final_answer_model = None
+        if "planning_model" in agent_dict:
+            planning_model_info = agent_dict["planning_model"]
+            planning_model_class = getattr(importlib.import_module("smolagents.models"), planning_model_info["class"])
+            planning_model = planning_model_class.from_dict(planning_model_info["data"])
+        if "action_model" in agent_dict:
+            action_model_info = agent_dict["action_model"]
+            action_model_class = getattr(importlib.import_module("smolagents.models"), action_model_info["class"])
+            action_model = action_model_class.from_dict(action_model_info["data"])
+        if "final_answer_model" in agent_dict:
+            final_answer_model_info = agent_dict["final_answer_model"]
+            final_answer_model_class = getattr(importlib.import_module("smolagents.models"), final_answer_model_info["class"])
+            final_answer_model = final_answer_model_class.from_dict(final_answer_model_info["data"])
         # Load tools
         tools = []
         for tool_info in agent_dict["tools"]:
@@ -1040,6 +1079,13 @@ You have been provided with these additional arguments, that you can access dire
             "name": agent_dict.get("name"),
             "description": agent_dict.get("description"),
         }
+        # Add per-step models if they exist
+        if planning_model is not None:
+            agent_args["planning_model"] = planning_model
+        if action_model is not None:
+            agent_args["action_model"] = action_model
+        if final_answer_model is not None:
+            agent_args["final_answer_model"] = final_answer_model
         # Filter out None values to use defaults from __init__
         agent_args = {k: v for k, v in agent_args.items() if v is not None}
         # Update with any additional kwargs
@@ -1169,7 +1215,7 @@ You have been provided with these additional arguments, that you can access dire
             private=private,
             exist_ok=True,
             repo_type="space",
-            space_sdk="gradio",
+            space_sdk="streamlit",
         )
         repo_id = repo_url.repo_id
         metadata_update(
@@ -1270,8 +1316,8 @@ class ToolCallingAgent(MultiStepAgent):
         memory_step.model_input_messages = input_messages
 
         try:
-            if self.stream_outputs and hasattr(self.model, "generate_stream"):
-                output_stream = self.model.generate_stream(
+            if self.stream_outputs and hasattr(self.action_model, "generate_stream"):
+                output_stream = self.action_model.generate_stream(
                     input_messages,
                     stop_sequences=["Observation:", "Calling tools:"],
                     tools_to_call_from=self.tools_and_managed_agents,
@@ -1287,7 +1333,7 @@ class ToolCallingAgent(MultiStepAgent):
                         yield event
                 chat_message = agglomerate_stream_deltas(chat_message_stream_deltas)
             else:
-                chat_message: ChatMessage = self.model.generate(
+                chat_message: ChatMessage = self.action_model.generate(
                     input_messages,
                     stop_sequences=["Observation:", "Calling tools:"],
                     tools_to_call_from=self.tools_and_managed_agents,
@@ -1639,7 +1685,7 @@ class CodeAgent(MultiStepAgent):
             if self._use_structured_outputs_internally:
                 additional_args["response_format"] = CODEAGENT_RESPONSE_FORMAT
             if self.stream_outputs:
-                output_stream = self.model.generate_stream(
+                output_stream = self.action_model.generate_stream(
                     input_messages,
                     stop_sequences=stop_sequences,
                     **additional_args,
@@ -1656,7 +1702,7 @@ class CodeAgent(MultiStepAgent):
                 memory_step.model_output_message = chat_message
                 output_text = chat_message.content
             else:
-                chat_message: ChatMessage = self.model.generate(
+                chat_message: ChatMessage = self.action_model.generate(
                     input_messages,
                     stop_sequences=stop_sequences,
                     **additional_args,

@@ -1,11 +1,9 @@
 from run import create_agent
 
-from smolagents.gradio_ui import GradioUI
+from smolagents.streamlit_ui import StreamlitUI
 
 
 agent = create_agent()
 
-demo = GradioUI(agent)
-
-if __name__ == "__main__":
-    demo.launch()
+streamlit_ui = StreamlitUI(agent)
+streamlit_ui.run()

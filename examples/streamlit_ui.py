@@ -1,4 +1,5 @@
-from smolagents import CodeAgent, GradioUI, InferenceClientModel, WebSearchTool
+import streamlit as st
+from smolagents import CodeAgent, StreamlitUI, InferenceClientModel, WebSearchTool
 
 
 agent = CodeAgent(
@@ -13,4 +14,5 @@ agent = CodeAgent(
     # use_structured_outputs_internally=True,
 )
 
-GradioUI(agent, file_upload_folder="./data").launch()
+streamlit_ui = StreamlitUI(agent, file_upload_folder="./data")
+streamlit_ui.run()

@@ -115,9 +115,9 @@ class Tool(BaseTool):
       `"text-classifier"` or `"image_generator"`.
     - **inputs** (`Dict[str, Dict[str, Union[str, type, bool]]]`) -- The dict of modalities expected for the inputs.
       It has one `type`key and a `description`key.
-      This is used by `launch_gradio_demo` or to make a nice space from your tool, and also can be used in the generated
+      This is used by `launch_streamlit_demo` or to make a nice space from your tool, and also can be used in the generated
       description for your tool.
-    - **output_type** (`type`) -- The type of the tool output. This is used by `launch_gradio_demo`
+    - **output_type** (`type`) -- The type of the tool output. This is used by `launch_streamlit_demo`
       or to make a nice space from your tool, and also can be used in the generated description for your tool.
     - **output_schema** (`Dict[str, Any]`, *optional*) -- The JSON schema defining the expected structure of the tool output.
       This can be included in system prompts to help agents understand the expected output format. Note: This is currently
@@ -387,13 +387,13 @@ class Tool(BaseTool):
 
         return tool
 
-    def save(self, output_dir: str | Path, tool_file_name: str = "tool", make_gradio_app: bool = True):
+    def save(self, output_dir: str | Path, tool_file_name: str = "tool", make_streamlit_app: bool = True):
         """
         Saves the relevant code files for your tool so it can be pushed to the Hub. This will copy the code of your
         tool in `output_dir` as well as autogenerate:
 
         - a `{tool_file_name}.py` file containing the logic for your tool.
-        If you pass `make_gradio_app=True`, this will also write:
+        If you pass `make_streamlit_app=True`, this will also write:
         - an `app.py` file providing a UI for your tool when it is exported to a Space with `tool.push_to_hub()`
         - a `requirements.txt` containing the names of the modules used by your tool (as detected when inspecting its
           code)
@@ -401,16 +401,16 @@ class Tool(BaseTool):
         Args:
             output_dir (`str` or `Path`): The folder in which you want to save your tool.
             tool_file_name (`str`, *optional*): The file name in which you want to save your tool.
-            make_gradio_app (`bool`, *optional*, defaults to True): Whether to also export a `requirements.txt` file and Gradio UI.
+            make_streamlit_app (`bool`, *optional*, defaults to True): Whether to also export a `requirements.txt` file and Streamlit UI.
         """
         # Ensure output directory exists
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         # Save tool file
         self._write_file(output_path / f"{tool_file_name}.py", self._get_tool_code())
-        if make_gradio_app:
+        if make_streamlit_app:
             #  Save app file
-            self._write_file(output_path / "app.py", self._get_gradio_app_code(tool_module_name=tool_file_name))
+            self._write_file(output_path / "app.py", self._get_streamlit_app_code(tool_module_name=tool_file_name))
             # Save requirements file
             self._write_file(output_path / "requirements.txt", self._get_requirements())
 
@@ -466,7 +466,7 @@ class Tool(BaseTool):
             private=private,
             exist_ok=True,
             repo_type="space",
-            space_sdk="gradio",
+            space_sdk="streamlit",
         )
         metadata_update(repo_url.repo_id, {"tags": ["smolagents", "tool"]}, repo_type="space", token=token)
         return repo_url.repo_id
@@ -479,10 +479,10 @@ class Tool(BaseTool):
                 path_in_repo="tool.py",
                 path_or_fileobj=self._get_tool_code().encode(),
             ),
-            # Add Gradio app
+            # Add Streamlit app
             CommitOperationAdd(
                 path_in_repo="app.py",
-                path_or_fileobj=self._get_gradio_app_code().encode(),
+                path_or_fileobj=self._get_streamlit_app_code().encode(),
             ),
             # Add requirements
             CommitOperationAdd(
@@ -496,16 +496,16 @@ class Tool(BaseTool):
         """Get the tool's code."""
         return self.to_dict()["code"]
 
-    def _get_gradio_app_code(self, tool_module_name: str = "tool") -> str:
-        """Get the Gradio app code."""
+    def _get_streamlit_app_code(self, tool_module_name: str = "tool") -> str:
+        """Get the Streamlit app code."""
         class_name = self.__class__.__name__
         return textwrap.dedent(
             f"""\
-            from smolagents import launch_gradio_demo
+            from smolagents import launch_streamlit_demo
             from {tool_module_name} import {class_name}
 
             tool = {class_name}()
-            launch_gradio_demo(tool)
+            launch_streamlit_demo(tool)
             """
         )
 
@@ -791,50 +791,64 @@ class Tool(BaseTool):
         return LangChainToolWrapper(langchain_tool)
 
 
-def launch_gradio_demo(tool: Tool):
+def launch_streamlit_demo(tool: Tool):
     """
-    Launches a gradio demo for a tool. The corresponding tool class needs to properly implement the class attributes
+    Launches a streamlit demo for a tool. The corresponding tool class needs to properly implement the class attributes
     `inputs` and `output_type`.
 
     Args:
         tool (`Tool`): The tool for which to launch the demo.
     """
     try:
-        import gradio as gr
+        import streamlit as st
     except ImportError:
-        raise ImportError("Gradio should be installed in order to launch a gradio demo.")
+        raise ImportError("Streamlit should be installed in order to launch a streamlit demo.")
 
-    TYPE_TO_COMPONENT_CLASS_MAPPING = {
-        "boolean": gr.Checkbox,
-        "image": gr.Image,
-        "audio": gr.Audio,
-        "string": gr.Textbox,
-        "integer": gr.Number,
-        "number": gr.Number,
-    }
+    st.title(tool.name)
+    if tool.description:
+        st.markdown(tool.description)
 
-    def tool_forward(*args, **kwargs):
-        return tool(*args, sanitize_inputs_outputs=True, **kwargs)
-
-    tool_forward.__signature__ = inspect.signature(tool.forward)
-
-    gradio_inputs = []
+    # Create input fields based on tool inputs
+    input_values = {}
     for input_name, input_details in tool.inputs.items():
-        input_gradio_component_class = TYPE_TO_COMPONENT_CLASS_MAPPING[input_details["type"]]
-        new_component = input_gradio_component_class(label=input_name)
-        gradio_inputs.append(new_component)
+        input_type = input_details["type"]
+        if input_type == "boolean":
+            input_values[input_name] = st.checkbox(input_name)
+        elif input_type == "image":
+            input_values[input_name] = st.file_uploader(input_name, type=["png", "jpg", "jpeg"])
+        elif input_type == "audio":
+            input_values[input_name] = st.file_uploader(input_name, type=["wav", "mp3"])
+        elif input_type == "string":
+            input_values[input_name] = st.text_input(input_name)
+        elif input_type in ["integer", "number"]:
+            input_values[input_name] = st.number_input(input_name, value=0.0 if input_type == "number" else 0)
 
-    output_gradio_component_class = TYPE_TO_COMPONENT_CLASS_MAPPING[tool.output_type]
-    gradio_output = output_gradio_component_class(label="Output")
-
-    gr.Interface(
-        fn=tool_forward,
-        inputs=gradio_inputs,
-        outputs=gradio_output,
-        title=tool.name,
-        description=tool.description,
-        api_name=tool.name,
-    ).launch()
+    if st.button("Run Tool"):
+        try:
+            result = tool(**input_values, sanitize_inputs_outputs=True)
+            
+            st.subheader("Output")
+            output_type = tool.output_type
+            if output_type == "boolean":
+                st.checkbox("Result", value=bool(result), disabled=True)
+            elif output_type == "image":
+                if isinstance(result, str):
+                    st.image(result)
+                else:
+                    st.image(result)
+            elif output_type == "audio":
+                if isinstance(result, str):
+                    st.audio(result)
+                else:
+                    st.audio(result)
+            elif output_type == "string":
+                st.text(result)
+            elif output_type in ["integer", "number"]:
+                st.number_input("Result", value=float(result) if output_type == "number" else int(result), disabled=True)
+            else:
+                st.write(result)
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 
 
 def load_tool(
@@ -1417,6 +1431,6 @@ __all__ = [
     "Tool",
     "tool",
     "load_tool",
-    "launch_gradio_demo",
+    "launch_streamlit_demo",
     "ToolCollection",
 ]

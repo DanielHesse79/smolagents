@@ -433,9 +433,10 @@ def is_valid_name(name: str) -> bool:
     return name.isidentifier() and not keyword.iskeyword(name) if isinstance(name, str) else False
 
 
-AGENT_GRADIO_APP_TEMPLATE = """import yaml
+AGENT_STREAMLIT_APP_TEMPLATE = """import yaml
 import os
-from smolagents import GradioUI, {{ class_name }}, {{ agent_dict['model']['class'] }}
+import streamlit as st
+from smolagents import StreamlitUI, {{ class_name }}, {{ agent_dict['model']['class'] }}
 
 # Get current directory path
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -467,16 +468,18 @@ with open(os.path.join(CURRENT_DIR, "prompts.yaml"), 'r') as stream:
     {{ attribute_name }}={{ value|repr }},
     {% endfor %}prompt_templates=prompt_templates
 )
+
 if __name__ == "__main__":
-    GradioUI({{ agent_name }}).launch()
+    streamlit_ui = StreamlitUI({{ agent_name }})
+    streamlit_ui.run()
 """.strip()
 
 
-def create_agent_gradio_app_template():
+def create_agent_streamlit_app_template():
     env = jinja2.Environment(loader=jinja2.BaseLoader(), undefined=jinja2.StrictUndefined)
     env.filters["repr"] = repr
     env.filters["camelcase"] = lambda value: "".join(word.capitalize() for word in value.split("_"))
-    return env.from_string(AGENT_GRADIO_APP_TEMPLATE)
+    return env.from_string(AGENT_STREAMLIT_APP_TEMPLATE)
 
 
 class RateLimiter:
