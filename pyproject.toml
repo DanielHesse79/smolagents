@@ -66,6 +66,10 @@ modal = [
 openai = [
   "openai>=1.58.1"
 ]
+qdrant = [
+  "qdrant-client>=1.7.0",
+  "sentence-transformers>=2.2.0",
+]
 telemetry = [
   "arize-phoenix",
   "opentelemetry-sdk",
@@ -90,7 +94,7 @@ vllm = [
   "torch"
 ]
 all = [
-  "smolagents[audio,blaxel,docker,e2b,streamlit,litellm,mcp,mlx-lm,modal,openai,telemetry,toolkit,transformers,vision,bedrock]",
+  "smolagents[audio,blaxel,docker,e2b,streamlit,litellm,mcp,mlx-lm,modal,openai,qdrant,telemetry,toolkit,transformers,vision,bedrock]",
 ]
 quality = [
   "ruff>=0.9.0",

@@ -1,4 +1,5 @@
 import inspect
+import uuid
 from dataclasses import asdict, dataclass
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Callable, Type
@@ -6,6 +7,9 @@ from typing import TYPE_CHECKING, Any, Callable, Type
 from smolagents.models import ChatMessage, MessageRole, get_dict_from_nested_dataclasses
 from smolagents.monitoring import AgentLogger, LogLevel, Timing, TokenUsage
 from smolagents.utils import AgentError, make_json_serializable
+
+if TYPE_CHECKING:
+    from smolagents.memory_backends import MemoryBackend
 
 
 if TYPE_CHECKING:
@@ -216,22 +220,76 @@ class AgentMemory:
 
     This class is used to store the agent's steps, including tasks, actions, and planning steps.
     It allows for resetting the memory, retrieving succinct or full step information, and replaying the agent's steps.
+    It optionally supports a backend for persistent storage and semantic search.
 
     Args:
         system_prompt (`str`): System prompt for the agent, which sets the context and instructions for the agent's behavior.
+        backend (`MemoryBackend`, *optional*): Optional memory backend for persistent storage and semantic search.
+        agent_id (`str`, *optional*): Unique identifier for the agent instance. Auto-generated if not provided.
+        run_id (`str`, *optional*): Unique identifier for the current agent run/session. Auto-generated if not provided.
 
     **Attributes**:
         - **system_prompt** (`SystemPromptStep`) -- System prompt step for the agent.
         - **steps** (`list[TaskStep | ActionStep | PlanningStep]`) -- List of steps taken by the agent, which can include tasks, actions, and planning steps.
+        - **backend** (`MemoryBackend | None`) -- Optional memory backend for persistent storage.
+        - **agent_id** (`str`) -- Unique identifier for the agent instance.
+        - **run_id** (`str`) -- Unique identifier for the current agent run/session.
     """
 
-    def __init__(self, system_prompt: str):
+    def __init__(
+        self,
+        system_prompt: str,
+        backend: "MemoryBackend | None" = None,
+        agent_id: str | None = None,
+        run_id: str | None = None,
+    ):
         self.system_prompt: SystemPromptStep = SystemPromptStep(system_prompt=system_prompt)
         self.steps: list[TaskStep | ActionStep | PlanningStep] = []
+        self.backend = backend
+        self.agent_id = agent_id or str(uuid.uuid4())
+        self.run_id = run_id or str(uuid.uuid4())
 
     def reset(self):
-        """Reset the agent's memory, clearing all steps and keeping the system prompt."""
+        """Reset the agent's memory, clearing all steps and keeping the system prompt.
+        
+        This also generates a new run_id for the next run, so the new run's steps
+        won't be excluded from semantic search of previous runs.
+        """
         self.steps = []
+        self.run_id = str(uuid.uuid4())  # New run_id for next run
+    
+    def add_step(self, step: MemoryStep):
+        """Add a step to memory list and optionally to backend storage.
+        
+        Args:
+            step: The memory step to add (ActionStep, PlanningStep, TaskStep, etc.)
+        """
+        self.steps.append(step)
+        if self.backend:
+            try:
+                self.backend.add_step(step, self.agent_id, self.run_id)
+            except Exception:
+                # Gracefully handle backend errors - don't break agent execution
+                pass
+    
+    def search_similar_experiences(self, query: str, k: int = 5) -> list[MemoryStep]:
+        """Search for similar past experiences using semantic search.
+        
+        Args:
+            query: Search query string
+            k: Number of similar steps to retrieve
+            
+        Returns:
+            List of similar MemoryStep objects from past runs, ordered by relevance.
+            Returns empty list if no backend is configured.
+        """
+        if self.backend:
+            try:
+                return self.backend.search_similar(query, k, exclude_run_id=self.run_id)
+            except Exception:
+                # Gracefully handle backend errors
+                return []
+        return []
 
     def get_succinct_steps(self) -> list[dict]:
         """Return a succinct representation of the agent's steps, excluding model input messages."""

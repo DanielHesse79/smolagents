@@ -35,6 +35,60 @@ class PreTool:
     repo_id: str
 
 
+@dataclass
+class SearchResult:
+    title: str
+    link: str
+    description: str = ""
+
+    def to_markdown(self, index: int | None = None) -> str:
+        prefix = f"{index}. " if index is not None else ""
+        extra_description = f"\n{self.description}" if self.description else ""
+        return f"{prefix}[{self.title}]({self.link}){extra_description}"
+
+    def __str__(self) -> str:
+        return self.to_markdown()
+
+
+class SearchResults(list[SearchResult]):
+    def __init__(self, results: list[SearchResult] | None = None, numbered: bool = False):
+        super().__init__(results or [])
+        self.numbered = numbered
+
+    def to_markdown(self) -> str:
+        if len(self) == 0:
+            return "No results found."
+
+        return "## Search Results\n\n" + "\n\n".join(
+            [
+                result.to_markdown(idx if self.numbered else None)
+                for idx, result in enumerate(self, start=1)
+            ]
+        )
+
+    def __str__(self) -> str:
+        return self.to_markdown()
+
+    @classmethod
+    def from_dicts(cls, results: list[dict], numbered: bool = False) -> "SearchResults":
+        parsed_results: list[SearchResult] = []
+        for result in results:
+            title = str(result.get("title") or "").strip()
+            link = str(result.get("link") or result.get("url") or result.get("href") or "").strip()
+            description = result.get("description") or result.get("body") or result.get("snippet") or ""
+
+            if isinstance(description, list):
+                description = " ".join(str(item) for item in description)
+
+            description = str(description).strip()
+
+            if not title or not link:
+                continue
+
+            parsed_results.append(SearchResult(title=title, link=link, description=description))
+        return cls(parsed_results, numbered=numbered)
+
+
 class PythonInterpreterTool(Tool):
     name = "python_interpreter"
     description = "This is a tool that evaluates python code. It can be used to perform calculations."
@@ -268,7 +322,10 @@ class ApiWebSearchTool(Tool):
     """
 
     name = "web_search"
-    description = "Performs a web search for a query and returns a string of the top search results formatted as markdown with titles, URLs, and descriptions."
+    description = (
+        "Performs a web search for a query and returns SearchResults you can index for title, url, and description. "
+        "When converted to a string, the results are formatted as markdown."
+    )
     inputs = {"query": {"type": "string", "description": "The search query to perform."}}
     output_type = "string"
 
@@ -314,8 +371,8 @@ class ApiWebSearchTool(Tool):
         response = requests.get(self.endpoint, headers=self.headers, params=params)
         response.raise_for_status()
         data = response.json()
-        results = self.extract_results(data)
-        return self.format_markdown(results)
+        results = SearchResults.from_dicts(self.extract_results(data), numbered=True)
+        return results
 
     def extract_results(self, data: dict) -> list:
         results = []
@@ -326,19 +383,15 @@ class ApiWebSearchTool(Tool):
         return results
 
     def format_markdown(self, results: list) -> str:
-        if not results:
-            return "No results found."
-        return "## Search Results\n\n" + "\n\n".join(
-            [
-                f"{idx}. [{result['title']}]({result['url']})\n{result['description']}"
-                for idx, result in enumerate(results, start=1)
-            ]
-        )
+        return str(SearchResults.from_dicts(results, numbered=True))
 
 
 class WebSearchTool(Tool):
     name = "web_search"
-    description = "Performs a web search for a query and returns a string of the top search results formatted as markdown with titles, links, and descriptions."
+    description = (
+        "Performs a web search for a query and returns SearchResults you can index for title, link, and description. "
+        "When converted to a string, the results are formatted as markdown."
+    )
     inputs = {"query": {"type": "string", "description": "The search query to perform."}}
     output_type = "string"
 
@@ -349,9 +402,10 @@ class WebSearchTool(Tool):
 
     def forward(self, query: str) -> str:
         results = self.search(query)
-        if len(results) == 0:
+        parsed_results = self.parse_results(results)
+        if len(parsed_results) == 0:
             raise Exception("No results found! Try a less restrictive/shorter query.")
-        return self.parse_results(results)
+        return parsed_results
 
     def search(self, query: str) -> list:
         if self.engine == "duckduckgo":
@@ -361,10 +415,8 @@ class WebSearchTool(Tool):
         else:
             raise ValueError(f"Unsupported engine: {self.engine}")
 
-    def parse_results(self, results: list) -> str:
-        return "## Search Results\n\n" + "\n\n".join(
-            [f"[{result['title']}]({result['link']})\n{result['description']}" for result in results]
-        )
+    def parse_results(self, results: list) -> SearchResults:
+        return SearchResults.from_dicts(results)
 
     def search_duckduckgo(self, query: str) -> list:
         import requests
@@ -646,6 +698,8 @@ TOOL_MAPPING = {
 
 __all__ = [
     "ApiWebSearchTool",
+    "SearchResult",
+    "SearchResults",
     "PythonInterpreterTool",
     "FinalAnswerTool",
     "UserInputTool",

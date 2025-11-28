@@ -20,6 +20,7 @@ import os
 import tempfile
 import textwrap
 import time
+import uuid
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
@@ -43,6 +44,8 @@ from rich.text import Text
 
 if TYPE_CHECKING:
     import PIL.Image
+    
+    from smolagents.memory_backends import MemoryBackend
 
 from .agent_types import AgentAudio, AgentImage, handle_agent_output_types
 from .default_tools import TOOL_MAPPING, FinalAnswerTool
@@ -311,6 +314,9 @@ class MultiStepAgent(ABC):
         planning_model: Model | None = None,
         action_model: Model | None = None,
         final_answer_model: Model | None = None,
+        memory_backend: "MemoryBackend | None" = None,
+        agent_id: str | None = None,
+        enable_experience_retrieval: bool = True,
     ):
         self.agent_name = self.__class__.__name__
         self.model = model
@@ -346,7 +352,18 @@ class MultiStepAgent(ABC):
         self._validate_tools_and_managed_agents(tools, managed_agents)
 
         self.task: str | None = None
-        self.memory = AgentMemory(self.system_prompt)
+        
+        # Memory backend and experience retrieval settings
+        self.enable_experience_retrieval = enable_experience_retrieval
+        
+        # Initialize memory with optional backend
+        run_id = str(uuid.uuid4())  # Generate unique run_id for this instance
+        self.memory = AgentMemory(
+            self.system_prompt,
+            backend=memory_backend,
+            agent_id=agent_id,
+            run_id=run_id,
+        )
 
         if logger is None:
             self.logger = AgentLogger(level=verbosity_level)
@@ -491,7 +508,8 @@ You have been provided with these additional arguments, that you can access dire
             level=LogLevel.INFO,
             title=self.name if hasattr(self, "name") else None,
         )
-        self.memory.steps.append(TaskStep(task=self.task, task_images=images))
+        task_step = TaskStep(task=self.task, task_images=images)
+        self.memory.add_step(task_step)
 
         if getattr(self, "python_executor", None):
             self.python_executor.send_variables(variables=self.state)
@@ -548,6 +566,27 @@ You have been provided with these additional arguments, that you can access dire
     ) -> Generator[ActionStep | PlanningStep | FinalAnswerStep | ChatMessageStreamDelta]:
         self.step_number = 1
         returned_final_answer = False
+        
+        # Retrieve similar experiences at the start if enabled
+        experience_context = ""
+        if self.enable_experience_retrieval and self.memory.backend and self.step_number == 1:
+            try:
+                similar_steps = self.memory.search_similar_experiences(query=task, k=3)
+                if similar_steps:
+                    experience_context = self._format_experiences(similar_steps)
+                    # Inject into task for use in prompts
+                    task = task + experience_context
+                    # Also update self.task so it's available throughout the run
+                    if self.task:
+                        self.task = self.task + experience_context
+                    self.logger.log(
+                        Text(f"Retrieved {len(similar_steps)} similar experiences from memory", style="dim"),
+                        level=LogLevel.INFO,
+                    )
+            except Exception:
+                # Gracefully handle retrieval errors
+                pass
+        
         while not returned_final_answer and self.step_number <= max_steps:
             if self.interrupt_switch:
                 raise AgentError("Agent interrupted.", self.logger)
@@ -570,7 +609,7 @@ You have been provided with these additional arguments, that you can access dire
                     end_time=planning_end_time,
                 )
                 self._finalize_step(planning_step)
-                self.memory.steps.append(planning_step)
+                self.memory.add_step(planning_step)
 
             # Start action step!
             action_step_start_time = time.time()
@@ -605,7 +644,7 @@ You have been provided with these additional arguments, that you can access dire
                 action_step.error = e
             finally:
                 self._finalize_step(action_step)
-                self.memory.steps.append(action_step)
+                self.memory.add_step(action_step)
                 yield action_step
                 self.step_number += 1
 
@@ -621,6 +660,46 @@ You have been provided with these additional arguments, that you can access dire
             except Exception as e:
                 raise AgentError(f"Check {check_function.__name__} failed with error: {e}", self.logger)
 
+    def _format_experiences(self, steps: list[MemoryStep]) -> str:
+        """Format similar experiences for injection into prompt context.
+        
+        Args:
+            steps: List of similar MemoryStep objects from past runs
+            
+        Returns:
+            Formatted string describing the experiences
+        """
+        if not steps:
+            return ""
+        
+        formatted = []
+        formatted.append("\n\n--- Previous Similar Experiences ---")
+        for i, step in enumerate(steps[:3], 1):  # Limit to top 3
+            if isinstance(step, ActionStep):
+                text = f"\nExperience {i}:\n"
+                if step.model_output:
+                    text += f"Agent output: {step.model_output[:200]}...\n"
+                if step.observations:
+                    text += f"Observations: {step.observations[:200]}...\n"
+                if step.code_action:
+                    text += f"Code used: {step.code_action[:150]}...\n"
+                formatted.append(text)
+            elif isinstance(step, PlanningStep):
+                text = f"\nExperience {i} (Planning):\n"
+                if step.plan:
+                    text += f"Plan: {step.plan[:200]}...\n"
+                formatted.append(text)
+            elif isinstance(step, TaskStep):
+                text = f"\nExperience {i} (Task):\n"
+                if step.task:
+                    text += f"Task: {step.task[:200]}...\n"
+                formatted.append(text)
+        
+        formatted.append("--- End of Previous Experiences ---\n")
+        formatted.append("Use these experiences as reference, but adapt to the current task.\n")
+        
+        return "\n".join(formatted)
+    
     def _finalize_step(self, memory_step: ActionStep | PlanningStep):
         memory_step.timing.end_time = time.time()
         self.step_callbacks.callback(memory_step, agent=self)
@@ -636,7 +715,7 @@ You have been provided with these additional arguments, that you can access dire
         )
         final_memory_step.action_output = final_answer.content
         self._finalize_step(final_memory_step)
-        self.memory.steps.append(final_memory_step)
+        self.memory.add_step(final_memory_step)
         return final_answer.content
 
     def _generate_planning_step(
