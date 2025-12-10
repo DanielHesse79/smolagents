@@ -146,6 +146,7 @@ from examples.shared_agent_utils import (
     create_unicode_safe_logger,
     setup_api_models,
     create_programming_agent,
+    create_unicode_safe_logger,
     StartupConfig,
     StartupResult,
     load_model_preferences,
@@ -172,6 +173,14 @@ def stream_to_gradio(
     from smolagents.models import ChatMessageStreamDelta, agglomerate_stream_deltas
     from smolagents.agent_types import AgentImage, AgentText, AgentAudio
     import re
+    from examples.shared_agent_utils import create_unicode_safe_logger
+
+    # Ensure the agent uses our Unicode-safe logger on Windows to avoid Rich cp1252 errors
+    try:
+        if agent and getattr(agent, "logger", None):
+            agent.logger = create_unicode_safe_logger(getattr(agent.logger, "level", 1))
+    except Exception:
+        pass
     
     def _clean_model_output(model_output: str) -> str:
         """Clean up model output by removing trailing tags and extra backticks."""
@@ -1596,6 +1605,10 @@ def main():
                                     if task_images and vision_agent:
                                         yield "🔍 **Vision Analysis (Qwen VL):**\n\n"
                                         try:
+                # Ensure vision agent uses Unicode-safe logger
+                if getattr(vision_agent, "logger", None):
+                    vision_agent.logger = create_unicode_safe_logger(getattr(vision_agent.logger, "level", 1))
+
                                             vision_result = vision_agent.run(task, images=task_images)
                                             vision_response = str(vision_result) if vision_result else "No analysis available"
                                             response = f"**Image Analysis:**\n{vision_response}\n\n---\n\n"
