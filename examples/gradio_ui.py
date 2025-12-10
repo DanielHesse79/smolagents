@@ -1303,180 +1303,7 @@ def main():
         startup_config_state = gr.State(value=config)
         
         with gr.Tabs() as tabs:
-            # Startup Checks Tab
-            with gr.Tab("Startup Checks"):
-                # Create startup interface content directly in tab
-                startup_result_state = gr.State(value=startup_result)
-                startup_config_state = gr.State(value=config)
-                
-                def retry_checks():
-                    """Retry startup checks."""
-                    config = StartupConfig()
-                    result = run_startup_checks(config)
-                    return (
-                        result,
-                        config,
-                        format_status_markdown(result),
-                        format_ollama_status(result.ollama),
-                        format_qdrant_status(result.qdrant),
-                        format_sqlite_status(result.sqlite),
-                        "\n".join([f"- {w}" for w in result.warnings]) if result.warnings else "No warnings",
-                        "\n".join([f"- {e}" for e in result.errors]) if result.errors else "No errors",
-                        gr.update(interactive=result.all_critical_services_ready),
-                    )
-                
-                gr.Markdown("# 🚀 System Startup Checks")
-                gr.Markdown("Checking system dependencies...")
-                
-                # Overall status
-                status_display = gr.Markdown()
-                
-                # Service status accordions
-                with gr.Accordion("🦙 Ollama Status", open=True):
-                    ollama_display = gr.Markdown()
-                
-                with gr.Accordion("🗄️ Qdrant Status", open=True):
-                    qdrant_display = gr.Markdown()
-                
-                with gr.Accordion("💾 SQLite Status", open=True):
-                    sqlite_display = gr.Markdown()
-                
-                # Warnings and errors
-                with gr.Accordion("⚠️ Warnings", open=False):
-                    warnings_display = gr.Markdown()
-                
-                with gr.Accordion("❌ Errors", open=False):
-                    errors_display = gr.Markdown()
-                
-                # Action buttons
-                with gr.Row():
-                    retry_btn = gr.Button("🔄 Retry Checks", variant="secondary")
-                
-                # Initial load
-                main_ui.load(
-                    fn=retry_checks,
-                    outputs=[
-                        startup_result_state,
-                        startup_config_state,
-                        status_display,
-                        ollama_display,
-                        qdrant_display,
-                        sqlite_display,
-                        warnings_display,
-                        errors_display,
-                    ],
-                )
-                
-                # Retry button
-                retry_btn.click(
-                    fn=retry_checks,
-                    outputs=[
-                        startup_result_state,
-                        startup_config_state,
-                        status_display,
-                        ollama_display,
-                        qdrant_display,
-                        sqlite_display,
-                        warnings_display,
-                        errors_display,
-                    ],
-                )
-            
-            # Model Selection Tab
-            with gr.Tab("🤖 Model Selection") as model_selection_tab:
-                gr.Markdown("## Select LLM Models")
-                gr.Markdown("Choose the models to use for the programming agent and manager agent.")
-                
-                # Check if agents are already initialized
-                agents_ready = _global_manager_agent is not None and _global_programming_agent is not None
-                
-                if startup_result.ollama.get("available", False) and _global_available_models:
-                    available_models = _global_available_models
-                    
-                    # Load saved preferences for default values
-                    saved_prefs = load_model_preferences()
-                    default_prog = saved_prefs.get("programming_model", available_models[0] if available_models else None)
-                    default_mgr = saved_prefs.get("manager_model", available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None))
-                    
-                    # Ensure defaults are in available models
-                    if default_prog not in available_models:
-                        default_prog = available_models[0] if available_models else None
-                    if default_mgr not in available_models:
-                        default_mgr = available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None)
-                    
-                    with gr.Row():
-                        programming_model_dropdown = gr.Dropdown(
-                            label="Programming Agent Model",
-                            choices=available_models,
-                            value=default_prog,
-                            info="Model used for code generation and programming tasks",
-                            interactive=not agents_ready,
-                        )
-                        
-                        manager_model_dropdown = gr.Dropdown(
-                            label="Manager Agent Model",
-                            choices=available_models,
-                            value=default_mgr,
-                            info="Model used for task planning and delegation",
-                            interactive=not agents_ready,
-                        )
-                    
-                    model_status = gr.Markdown()
-                    
-                    def initialize_with_selected_models(prog_model, mgr_model):
-                        """Initialize agents with selected models."""
-                        if not prog_model or not mgr_model:
-                            return "❌ Please select both models", gr.update(visible=True)
-                        
-                        if prog_model == mgr_model:
-                            return "⚠️ Warning: Using the same model for both agents is not recommended", gr.update(visible=True)
-                        
-                        success, message = initialize_agents_with_models(
-                            prog_model, 
-                            mgr_model, 
-                            startup_result, 
-                            config
-                        )
-                        
-                        if success:
-                            # Update global available models list
-                            global _global_available_models
-                            _global_available_models = available_models
-                            
-                            return message, gr.update(visible=False)
-                        else:
-                            return message, gr.update(visible=True)
-                    
-                    init_btn = gr.Button("🚀 Initialize Agents", variant="primary", visible=not agents_ready)
-                    init_status = gr.Markdown()
-                    
-                    if agents_ready:
-                        gr.Markdown(f"### ✅ Agents Already Initialized")
-                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
-                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
-                        gr.Markdown("\nTo change models, restart the application.")
-                    else:
-                        gr.Markdown("### ⚠️ Model Selection Required")
-                        gr.Markdown("Please select models and click 'Initialize Agents' to start using the application.")
-                    
-                    init_btn.click(
-                        fn=initialize_with_selected_models,
-                        inputs=[programming_model_dropdown, manager_model_dropdown],
-                        outputs=[init_status, init_btn]
-                    )
-                    
-                elif not startup_result.ollama.get("available", False):
-                    gr.Markdown("### ❌ Ollama Not Available")
-                    gr.Markdown("Ollama is not running or not accessible. Please start Ollama to select models.")
-                    if agents_ready:
-                        gr.Markdown(f"### ✅ Using API Models")
-                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
-                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
-                else:
-                    gr.Markdown("### ⚠️ No Models Available")
-                    gr.Markdown("No Ollama models found. Please install models using `ollama pull <model_name>`")
-            
-            # Chat Tab
+            # Chat Tab (moved to first position to be default)
             with gr.Tab("Chat"):
                 chat_container = gr.Column(visible=_global_manager_agent is not None)
                 init_container = gr.Column(visible=_global_manager_agent is None)
@@ -1573,7 +1400,7 @@ def main():
                         def chat_fn(message, history, files, images, selected_model=None, use_open_deep_research=False):
                             """Handle chat messages with PDF reading and vision model auto-selection."""
                             global _global_manager_agent
-                            agent = _global_manager_agent if _global_manager_agent else manager_agent
+                            agent = _global_manager_agent
                             if not agent:
                                 yield "❌ Agent not initialized. Please check Startup Checks tab."
                                 return
@@ -1813,6 +1640,179 @@ def main():
                         # Note: ChatInterface renders automatically, no need to call .render()
                     else:
                         gr.Markdown("Agents will be available after initialization.")
+            
+            # Startup Checks Tab
+            with gr.Tab("Startup Checks"):
+                # Create startup interface content directly in tab
+                startup_result_state = gr.State(value=startup_result)
+                startup_config_state = gr.State(value=config)
+                
+                def retry_checks():
+                    """Retry startup checks."""
+                    config = StartupConfig()
+                    result = run_startup_checks(config)
+                    return (
+                        result,
+                        config,
+                        format_status_markdown(result),
+                        format_ollama_status(result.ollama),
+                        format_qdrant_status(result.qdrant),
+                        format_sqlite_status(result.sqlite),
+                        "\n".join([f"- {w}" for w in result.warnings]) if result.warnings else "No warnings",
+                        "\n".join([f"- {e}" for e in result.errors]) if result.errors else "No errors",
+                        gr.update(interactive=result.all_critical_services_ready),
+                    )
+                
+                gr.Markdown("# 🚀 System Startup Checks")
+                gr.Markdown("Checking system dependencies...")
+                
+                # Overall status
+                status_display = gr.Markdown()
+                
+                # Service status accordions
+                with gr.Accordion("🦙 Ollama Status", open=True):
+                    ollama_display = gr.Markdown()
+                
+                with gr.Accordion("🗄️ Qdrant Status", open=True):
+                    qdrant_display = gr.Markdown()
+                
+                with gr.Accordion("💾 SQLite Status", open=True):
+                    sqlite_display = gr.Markdown()
+                
+                # Warnings and errors
+                with gr.Accordion("⚠️ Warnings", open=False):
+                    warnings_display = gr.Markdown()
+                
+                with gr.Accordion("❌ Errors", open=False):
+                    errors_display = gr.Markdown()
+                
+                # Action buttons
+                with gr.Row():
+                    retry_btn = gr.Button("🔄 Retry Checks", variant="secondary")
+                
+                # Initial load
+                main_ui.load(
+                    fn=retry_checks,
+                    outputs=[
+                        startup_result_state,
+                        startup_config_state,
+                        status_display,
+                        ollama_display,
+                        qdrant_display,
+                        sqlite_display,
+                        warnings_display,
+                        errors_display,
+                    ],
+                )
+                
+                # Retry button
+                retry_btn.click(
+                    fn=retry_checks,
+                    outputs=[
+                        startup_result_state,
+                        startup_config_state,
+                        status_display,
+                        ollama_display,
+                        qdrant_display,
+                        sqlite_display,
+                        warnings_display,
+                        errors_display,
+                    ],
+                )
+            
+            # Model Selection Tab
+            with gr.Tab("🤖 Model Selection") as model_selection_tab:
+                gr.Markdown("## Select LLM Models")
+                gr.Markdown("Choose the models to use for the programming agent and manager agent.")
+                
+                # Check if agents are already initialized
+                agents_ready = _global_manager_agent is not None and _global_programming_agent is not None
+                
+                if startup_result.ollama.get("available", False) and _global_available_models:
+                    available_models = _global_available_models
+                    
+                    # Load saved preferences for default values
+                    saved_prefs = load_model_preferences()
+                    default_prog = saved_prefs.get("programming_model", available_models[0] if available_models else None)
+                    default_mgr = saved_prefs.get("manager_model", available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None))
+                    
+                    # Ensure defaults are in available models
+                    if default_prog not in available_models:
+                        default_prog = available_models[0] if available_models else None
+                    if default_mgr not in available_models:
+                        default_mgr = available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None)
+                    
+                    with gr.Row():
+                        programming_model_dropdown = gr.Dropdown(
+                            label="Programming Agent Model",
+                            choices=available_models,
+                            value=default_prog,
+                            info="Model used for code generation and programming tasks",
+                            interactive=not agents_ready,
+                        )
+                        
+                        manager_model_dropdown = gr.Dropdown(
+                            label="Manager Agent Model",
+                            choices=available_models,
+                            value=default_mgr,
+                            info="Model used for task planning and delegation",
+                            interactive=not agents_ready,
+                        )
+                    
+                    model_status = gr.Markdown()
+                    
+                    def initialize_with_selected_models(prog_model, mgr_model):
+                        """Initialize agents with selected models."""
+                        if not prog_model or not mgr_model:
+                            return "❌ Please select both models", gr.update(visible=True)
+                        
+                        if prog_model == mgr_model:
+                            return "⚠️ Warning: Using the same model for both agents is not recommended", gr.update(visible=True)
+                        
+                        success, message = initialize_agents_with_models(
+                            prog_model, 
+                            mgr_model, 
+                            startup_result, 
+                            config
+                        )
+                        
+                        if success:
+                            # Update global available models list
+                            global _global_available_models
+                            _global_available_models = available_models
+                            
+                            return message, gr.update(visible=False)
+                        else:
+                            return message, gr.update(visible=True)
+                    
+                    init_btn = gr.Button("🚀 Initialize Agents", variant="primary", visible=not agents_ready)
+                    init_status = gr.Markdown()
+                    
+                    if agents_ready:
+                        gr.Markdown(f"### ✅ Agents Already Initialized")
+                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
+                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
+                        gr.Markdown("\nTo change models, restart the application.")
+                    else:
+                        gr.Markdown("### ⚠️ Model Selection Required")
+                        gr.Markdown("Please select models and click 'Initialize Agents' to start using the application.")
+                    
+                    init_btn.click(
+                        fn=initialize_with_selected_models,
+                        inputs=[programming_model_dropdown, manager_model_dropdown],
+                        outputs=[init_status, init_btn]
+                    )
+                    
+                elif not startup_result.ollama.get("available", False):
+                    gr.Markdown("### ❌ Ollama Not Available")
+                    gr.Markdown("Ollama is not running or not accessible. Please start Ollama to select models.")
+                    if agents_ready:
+                        gr.Markdown(f"### ✅ Using API Models")
+                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
+                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
+                else:
+                    gr.Markdown("### ⚠️ No Models Available")
+                    gr.Markdown("No Ollama models found. Please install models using `ollama pull <model_name>`")
             
             # Monitoring Tab
             with gr.Tab("📊 Monitoring"):
