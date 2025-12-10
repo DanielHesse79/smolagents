@@ -1399,13 +1399,19 @@ def main():
                         # Chat function for ChatInterface
                         def chat_fn(message, history, files, images, selected_model=None, use_open_deep_research=False):
                             """Handle chat messages with PDF reading and vision model auto-selection."""
-                            global _global_manager_agent
-                            agent = _global_manager_agent
-                            if not agent:
-                                yield "❌ Agent not initialized. Please check Startup Checks tab."
-                                return
-                            
-                            # Maximum input length (configurable via AGENT_MAX_INPUT_LENGTH env var)
+                            try:
+                                global _global_manager_agent
+                                agent = _global_manager_agent
+                                if not agent:
+                                    yield "❌ Agent not initialized. Please check Startup Checks tab or Model Selection tab to initialize agents."
+                                    return
+                                
+                                # Validate message
+                                if not message or not message.strip():
+                                    yield "❌ Please provide a message."
+                                    return
+                                
+                                # Maximum input length (configurable via AGENT_MAX_INPUT_LENGTH env var)
                             MAX_TOTAL_INPUT = int(os.getenv("AGENT_MAX_INPUT_LENGTH", "50000"))
                             MAX_DOC_CONTENT = MAX_TOTAL_INPUT - len(message) - 2000  # Reserve 2000 chars for metadata/paths
                             
@@ -1565,6 +1571,9 @@ def main():
                             except Exception as e:
                                 error_msg = f"❌ **Error:** {str(e)}\n\n```python\n{traceback.format_exc()}\n```"
                                 yield error_msg
+                                import sys
+                                print(f"[ERROR] Chat function error: {e}", file=sys.stderr)
+                                traceback.print_exc()
                         
                         # Additional inputs - ORDER MUST MATCH chat_fn parameters!
                         # chat_fn signature: (message, history, files, images, selected_model, use_open_deep_research)
