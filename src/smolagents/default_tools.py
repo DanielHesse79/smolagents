@@ -18,10 +18,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from .local_python_executor import (
-    BASE_BUILTIN_MODULES,
     BASE_PYTHON_TOOLS,
     evaluate_python_code,
 )
+from .utils import BASE_BUILTIN_MODULES
 from .tools import PipelineTool, Tool
 
 
@@ -100,17 +100,14 @@ class PythonInterpreterTool(Tool):
     }
     output_type = "string"
 
-    def __init__(self, *args, authorized_imports=None, **kwargs):
-        if authorized_imports is None:
-            self.authorized_imports = list(set(BASE_BUILTIN_MODULES))
-        else:
-            self.authorized_imports = list(set(BASE_BUILTIN_MODULES) | set(authorized_imports))
+    def __init__(self, *args, risk_tolerance: str = "medium", **kwargs):
+        self.risk_tolerance = risk_tolerance
         self.inputs = {
             "code": {
                 "type": "string",
                 "description": (
-                    "The code snippet to evaluate. All variables used in this snippet must be defined in this same snippet, "
-                    f"else you will get an error. This code can only import the following python libraries: {self.authorized_imports}."
+                    "The code snippet to evaluate. All variables used in this snippet must be defined in this same snippet. "
+                    "Import validation is based on risk analysis."
                 ),
             }
         }
@@ -125,7 +122,7 @@ class PythonInterpreterTool(Tool):
                 code,
                 state=state,
                 static_tools=self.base_python_tools,
-                authorized_imports=self.authorized_imports,
+                risk_tolerance=self.risk_tolerance,
             )[0]  # The second element is boolean is_final_answer
         )
         return f"Stdout:\n{str(state['_print_outputs'])}\nOutput: {output}"

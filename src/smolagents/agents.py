@@ -49,7 +49,8 @@ if TYPE_CHECKING:
 
 from .agent_types import AgentAudio, AgentImage, handle_agent_output_types
 from .default_tools import TOOL_MAPPING, FinalAnswerTool
-from .local_python_executor import BASE_BUILTIN_MODULES, LocalPythonExecutor, PythonExecutor, fix_final_answer_code
+from .local_python_executor import LocalPythonExecutor, PythonExecutor, fix_final_answer_code
+from .utils import BASE_BUILTIN_MODULES
 from .memory import (
     ActionStep,
     AgentMemory,
@@ -89,12 +90,13 @@ from .utils import (
     AgentParsingError,
     AgentToolCallError,
     AgentToolExecutionError,
-    create_agent_streamlit_app_template,
+    create_agent_gradio_app_template,
     extract_code_from_text,
     is_valid_name,
     make_init_file,
     parse_code_blobs,
     truncate_content,
+    validate_user_input,
 )
 
 
@@ -317,6 +319,7 @@ class MultiStepAgent(ABC):
         memory_backend: "MemoryBackend | None" = None,
         agent_id: str | None = None,
         enable_experience_retrieval: bool = True,
+        response_cache: "ResponseCache | None" = None,
     ):
         self.agent_name = self.__class__.__name__
         self.model = model
@@ -373,6 +376,23 @@ class MultiStepAgent(ABC):
         self.monitor = Monitor(self.model, self.logger)
         self._setup_step_callbacks(step_callbacks)
         self.stream_outputs = False
+        
+        # Response cache for model responses
+        if response_cache is None:
+            try:
+                from .cache import get_cache
+                self.response_cache = get_cache()
+            except ImportError:
+                self.response_cache = None
+        else:
+            self.response_cache = response_cache
+        
+        # Error tracking for circuit breaker
+        self._error_history: list[str] = []
+        
+        # Output repetition tracking
+        self._last_output_hash: int | None = None
+        self._repetition_count: int = 0
 
     @property
     def system_prompt(self) -> str:
@@ -465,6 +485,7 @@ class MultiStepAgent(ABC):
         additional_args: dict | None = None,
         max_steps: int | None = None,
         return_full_result: bool | None = None,
+        validate_input: bool = True,
     ) -> Any | RunResult:
         """
         Run the agent for the given task.
@@ -490,6 +511,12 @@ class MultiStepAgent(ABC):
         """
         max_steps = max_steps or self.max_steps
         self.task = task
+        # Validate user input if requested
+        if validate_input:
+            is_valid, error_msg = validate_user_input(task)
+            if not is_valid:
+                raise ValueError(f"Input validation failed: {error_msg}")
+        
         self.interrupt_switch = False
         if additional_args:
             self.state.update(additional_args)
@@ -583,9 +610,12 @@ You have been provided with these additional arguments, that you can access dire
                         Text(f"Retrieved {len(similar_steps)} similar experiences from memory", style="dim"),
                         level=LogLevel.INFO,
                     )
-            except Exception:
+            except Exception as e:
                 # Gracefully handle retrieval errors
-                pass
+                self.logger.log(
+                    f"Failed to retrieve similar experiences: {type(e).__name__}: {e}",
+                    level=LogLevel.DEBUG
+                )
         
         while not returned_final_answer and self.step_number <= max_steps:
             if self.interrupt_switch:
@@ -641,11 +671,16 @@ You have been provided with these additional arguments, that you can access dire
                 raise e
             except AgentError as e:
                 # Other AgentError types are caused by the Model, so we should log them and iterate.
+                # Track error for circuit breaker
+                self._track_error(e)
                 action_step.error = e
             finally:
                 self._finalize_step(action_step)
                 self.memory.add_step(action_step)
                 yield action_step
+                # Reset error tracker on successful step (no error or error was handled)
+                if action_step.error is None:
+                    self._reset_error_tracker()
                 self.step_number += 1
 
         if not returned_final_answer and self.step_number == max_steps + 1:
@@ -653,12 +688,81 @@ You have been provided with these additional arguments, that you can access dire
             yield action_step
         yield FinalAnswerStep(handle_agent_output_types(final_answer))
 
+    def _track_error(self, error: AgentError) -> None:
+        """Track errors and detect failure loops.
+        
+        Args:
+            error: The AgentError that occurred
+            
+        Raises:
+            AgentError: If the same error occurred 3+ times consecutively (circuit breaker)
+        """
+        # Create error signature (type + first 200 chars of message)
+        error_key = f"{type(error).__name__}:{str(error)[:200]}"
+        
+        # Append to history
+        self._error_history.append(error_key)
+        # Keep only last 5 errors
+        self._error_history = self._error_history[-5:]
+        
+        # Check for repeated errors (circuit breaker)
+        if self._error_history.count(error_key) >= 3:
+            raise AgentError(
+                f"Circuit breaker triggered: Same error occurred 3 times consecutively. "
+                f"Error pattern: {error_key[:100]}... "
+                f"Stopping execution to prevent infinite failure loop.",
+                self.logger
+            )
+    
+    def _reset_error_tracker(self) -> None:
+        """Reset error tracker on successful step."""
+        self._error_history = []
+    
+    def _detect_output_repetition(self, output_text: str) -> tuple[str, bool]:
+        """Detect and handle repeated model output.
+        
+        Args:
+            output_text: The model output text to check for repetition
+            
+        Returns:
+            tuple[str, bool]: (processed_output, is_repetition_detected)
+        """
+        if not output_text:
+            return output_text, False
+        
+        # Hash first 500 chars to detect repetition
+        prefix = output_text[:500]
+        current_hash = hash(prefix)
+        
+        if current_hash == self._last_output_hash:
+            self._repetition_count += 1
+            if self._repetition_count >= 3:
+                # Repetition detected - log warning and truncate
+                self.logger.log(
+                    f"[red]Model output repetition detected ({self._repetition_count}x). "
+                    f"Truncating repeated content to prevent token waste.[/red]",
+                    level=LogLevel.INFO
+                )
+                # Return only the first occurrence
+                return prefix, True
+        else:
+            # New content - reset counter
+            self._repetition_count = 0
+        
+        self._last_output_hash = current_hash
+        return output_text, False
+
     def _validate_final_answer(self, final_answer: Any):
         for check_function in self.final_answer_checks:
             try:
                 assert check_function(final_answer, self.memory, agent=self)
+            except AssertionError:
+                raise AgentError(f"Check {check_function.__name__} failed", self.logger)
             except Exception as e:
-                raise AgentError(f"Check {check_function.__name__} failed with error: {e}", self.logger)
+                raise AgentError(
+                    f"Check {check_function.__name__} raised an error: {type(e).__name__}: {e}",
+                    self.logger
+                ) from e
 
     def _format_experiences(self, steps: list[MemoryStep]) -> str:
         """Format similar experiences for injection into prompt context.
@@ -674,7 +778,11 @@ You have been provided with these additional arguments, that you can access dire
         
         formatted = []
         formatted.append("\n\n--- Previous Similar Experiences ---")
-        for i, step in enumerate(steps[:3], 1):  # Limit to top 3
+        # Filter out TaskStep to avoid injecting unrelated questions/tasks
+        # Only include ActionStep and PlanningStep which contain actual execution patterns
+        filtered_steps = [s for s in steps if not isinstance(s, TaskStep)]
+        
+        for i, step in enumerate(filtered_steps[:3], 1):  # Limit to top 3
             if isinstance(step, ActionStep):
                 text = f"\nExperience {i}:\n"
                 if step.model_output:
@@ -689,11 +797,9 @@ You have been provided with these additional arguments, that you can access dire
                 if step.plan:
                     text += f"Plan: {step.plan[:200]}...\n"
                 formatted.append(text)
-            elif isinstance(step, TaskStep):
-                text = f"\nExperience {i} (Task):\n"
-                if step.task:
-                    text += f"Task: {step.task[:200]}...\n"
-                formatted.append(text)
+        
+        if not formatted:
+            return ""  # No valid experiences to show
         
         formatted.append("--- End of Previous Experiences ---\n")
         formatted.append("Use these experiences as reference, but adapt to the current task.\n")
@@ -947,10 +1053,25 @@ You have been provided with these additional arguments, that you can access dire
         """
         self.memory.replay(self.logger, detailed=detailed)
 
-    def __call__(self, task: str, **kwargs):
+    def __call__(self, task: str, *args, **kwargs):
         """Adds additional prompting for the managed agent, runs it, and wraps the output.
         This method is called only by a managed agent.
         """
+        additional_args = None
+        if args:
+            if len(args) > 1:
+                raise TypeError(
+                    f"{self.__class__.__name__}.__call__() takes 2 positional arguments but {len(args) + 1} were given"
+                )
+            additional_args = args[0]
+        if "additional_args" in kwargs:
+            if additional_args is not None:
+                raise TypeError("additional_args was provided both positionally and as a keyword argument.")
+            additional_args = kwargs.pop("additional_args")
+        if additional_args is not None:
+            if not isinstance(additional_args, dict):
+                raise TypeError("additional_args must be provided as a dictionary of extra inputs.")
+            kwargs["additional_args"] = additional_args
         full_task = populate_template(
             self.prompt_templates["managed_agent"]["task"],
             variables=dict(name=self.name, task=task),
@@ -1002,7 +1123,7 @@ You have been provided with these additional arguments, that you can access dire
         # Save tools to different .py files
         for tool in self.tools.values():
             make_init_file(os.path.join(output_dir, "tools"))
-            tool.save(os.path.join(output_dir, "tools"), tool_file_name=tool.name, make_streamlit_app=False)
+            tool.save(os.path.join(output_dir, "tools"), tool_file_name=tool.name, make_gradio_app=False)
 
         # Save prompts to yaml
         yaml_prompts = yaml.safe_dump(
@@ -1029,10 +1150,10 @@ You have been provided with these additional arguments, that you can access dire
         with open(os.path.join(output_dir, "requirements.txt"), "w", encoding="utf-8") as f:
             f.writelines(f"{r}\n" for r in agent_dict["requirements"])
 
-        # Make agent.py file with Streamlit UI
+        # Make agent.py file with Gradio UI
         agent_name = f"agent_{self.name}" if getattr(self, "name", None) else "agent"
         managed_agent_relative_path = relative_path + "." if relative_path is not None else ""
-        app_template = create_agent_streamlit_app_template()
+        app_template = create_agent_gradio_app_template()
 
         # Render the app.py file from Jinja2 template
         app_text = app_template.render(
@@ -1055,10 +1176,16 @@ You have been provided with these additional arguments, that you can access dire
         Returns:
             `dict`: Dictionary representation of the agent.
         """
-        # TODO: handle serializing step_callbacks and final_answer_checks
+        # Note: step_callbacks and final_answer_checks cannot be serialized because they are callable functions.
+        # These are typically user-defined functions that cannot be safely pickled or represented in JSON/YAML.
+        # When exporting agents to Hub, these callbacks must be re-registered after loading.
         for attr in ["final_answer_checks", "step_callbacks"]:
             if getattr(self, attr, None):
-                self.logger.log(f"This agent has {attr}: they will be ignored by this method.", LogLevel.INFO)
+                self.logger.log(
+                    f"This agent has {attr}: they will be ignored by this method. "
+                    f"Re-register them after loading the agent from Hub.",
+                    LogLevel.INFO
+                )
 
         tool_dicts = [tool.to_dict() for tool in self.tools.values()]
         tool_requirements = {req for tool in self.tools.values() for req in tool.to_dict()["requirements"]}
@@ -1236,7 +1363,7 @@ You have been provided with these additional arguments, that you can access dire
         """
         # Load agent.json
         folder = Path(folder)
-        agent_dict = json.loads((folder / "agent.json").read_text())
+        agent_dict = json.loads((folder / "agent.json").read_text(encoding='utf-8'))
         # Handle HfApiModel -> InferenceClientModel rename for old agents
         if agent_dict.get("model", {}).get("class") == "HfApiModel":
             agent_dict["model"]["class"] = "InferenceClientModel"
@@ -1253,7 +1380,7 @@ You have been provided with these additional arguments, that you can access dire
         # Load tools
         tools = []
         for tool_name in agent_dict["tools"]:
-            tool_code = (folder / "tools" / f"{tool_name}.py").read_text()
+            tool_code = (folder / "tools" / f"{tool_name}.py").read_text(encoding='utf-8')
             tools.append({"name": tool_name, "code": tool_code})
         agent_dict["tools"] = tools
 
@@ -1294,7 +1421,7 @@ You have been provided with these additional arguments, that you can access dire
             private=private,
             exist_ok=True,
             repo_type="space",
-            space_sdk="streamlit",
+            space_sdk="gradio",
         )
         repo_id = repo_url.repo_id
         metadata_update(
@@ -1332,6 +1459,15 @@ class ToolCallingAgent(MultiStepAgent):
             Higher values increase concurrency but resource usage as well.
             Defaults to `ThreadPoolExecutor`'s default.
         **kwargs: Additional keyword arguments.
+
+    Note:
+        **Thread Safety**: When `max_tool_threads > 1`, tools may be executed in parallel using a `ThreadPoolExecutor`.
+        Tools should be designed to be either:
+        - **Stateless**: No shared mutable state between calls
+        - **Thread-safe**: Properly synchronized if they maintain state
+        
+        Tools that modify shared resources (files, databases, network connections) should implement
+        appropriate locking or use thread-safe operations to avoid race conditions.
     """
 
     def __init__(
@@ -1345,7 +1481,7 @@ class ToolCallingAgent(MultiStepAgent):
         **kwargs,
     ):
         prompt_templates = prompt_templates or yaml.safe_load(
-            importlib.resources.files("smolagents.prompts").joinpath("toolcalling_agent.yaml").read_text()
+            importlib.resources.files("smolagents.prompts").joinpath("toolcalling_agent.yaml").read_text(encoding='utf-8')
         )
         super().__init__(
             tools=tools,
@@ -1500,7 +1636,9 @@ class ToolCallingAgent(MultiStepAgent):
                     observation_name = "image.png"
                 elif tool_call_result_type == AgentAudio:
                     observation_name = "audio.mp3"
-                # TODO: tool_call_result naming could allow for different names of same type
+                # Note: Currently, tool_call_result naming uses fixed names per type (image.png, audio.mp3).
+                # This means multiple results of the same type will overwrite each other in state.
+                # Future enhancement: Allow custom naming or automatic numbering (image_1.png, image_2.png, etc.)
                 self.state[observation_name] = tool_call_result
                 observation = f"Stored '{observation_name}' in memory."
             else:
@@ -1529,6 +1667,8 @@ class ToolCallingAgent(MultiStepAgent):
             yield tool_output
         else:
             # If multiple tool calls, process them in parallel
+            # Note: Tools executed in parallel must be thread-safe or stateless
+            # See ToolCallingAgent class docstring for thread safety requirements
             with ThreadPoolExecutor(self.max_tool_threads) as executor:
                 futures = []
                 for tool_call in parallel_calls.values():
@@ -1582,6 +1722,8 @@ class ToolCallingAgent(MultiStepAgent):
             validate_tool_arguments(tool, arguments)
         except (ValueError, TypeError) as e:
             raise AgentToolCallError(str(e), self.logger) from e
+        except (KeyboardInterrupt, SystemExit):
+            raise  # Re-raise system exceptions
         except Exception as e:
             error_msg = f"Error executing tool '{tool_name}' with arguments {str(arguments)}: {type(e).__name__}: {e}"
             raise AgentToolExecutionError(error_msg, self.logger) from e
@@ -1616,7 +1758,7 @@ class CodeAgent(MultiStepAgent):
         tools (`list[Tool]`): [`Tool`]s that the agent can use.
         model (`Model`): Model that will generate the agent's actions.
         prompt_templates ([`~agents.PromptTemplates`], *optional*): Prompt templates.
-        additional_authorized_imports (`list[str]`, *optional*): Additional authorized imports for the agent.
+        import_risk_tolerance (`str`, *optional*): Risk tolerance for imports: "low", "medium" (default), or "high".
         planning_interval (`int`, *optional*): Interval at which the agent will run a planning step.
         executor ([`PythonExecutor`], *optional*): Custom Python code executor. If not provided, a default executor will be created based on `executor_type`.
         executor_type (`Literal["local", "blaxel", "e2b", "modal", "docker", "wasm"]`, default `"local"`): Type of code executor.
@@ -1635,7 +1777,7 @@ class CodeAgent(MultiStepAgent):
         tools: list[Tool],
         model: Model,
         prompt_templates: PromptTemplates | None = None,
-        additional_authorized_imports: list[str] | None = None,
+        import_risk_tolerance: str = "medium",
         planning_interval: int | None = None,
         executor: PythonExecutor = None,
         executor_type: Literal["local", "blaxel", "e2b", "modal", "docker", "wasm"] = "local",
@@ -1646,17 +1788,18 @@ class CodeAgent(MultiStepAgent):
         code_block_tags: str | tuple[str, str] | None = None,
         **kwargs,
     ):
-        self.additional_authorized_imports = additional_authorized_imports if additional_authorized_imports else []
-        self.authorized_imports = sorted(set(BASE_BUILTIN_MODULES) | set(self.additional_authorized_imports))
+        self.import_risk_tolerance = import_risk_tolerance
+        if import_risk_tolerance not in ["low", "medium", "high"]:
+            raise ValueError(f"import_risk_tolerance must be 'low', 'medium', or 'high', got '{import_risk_tolerance}'")
         self.max_print_outputs_length = max_print_outputs_length
         self._use_structured_outputs_internally = use_structured_outputs_internally
         if self._use_structured_outputs_internally:
             prompt_templates = prompt_templates or yaml.safe_load(
-                importlib.resources.files("smolagents.prompts").joinpath("structured_code_agent.yaml").read_text()
+                importlib.resources.files("smolagents.prompts").joinpath("structured_code_agent.yaml").read_text(encoding='utf-8')
             )
         else:
             prompt_templates = prompt_templates or yaml.safe_load(
-                importlib.resources.files("smolagents.prompts").joinpath("code_agent.yaml").read_text()
+                importlib.resources.files("smolagents.prompts").joinpath("code_agent.yaml").read_text(encoding='utf-8')
             )
 
         if isinstance(code_block_tags, str) and not code_block_tags == "markdown":
@@ -1681,9 +1824,9 @@ class CodeAgent(MultiStepAgent):
             raise ValueError(
                 "`stream_outputs` is set to True, but the model class implements no `generate_stream` method."
             )
-        if "*" in self.additional_authorized_imports:
+        if self.import_risk_tolerance == "high":
             self.logger.log(
-                "Caution: you set an authorization for all imports, meaning your agent can decide to import any package it deems necessary. This might raise issues if the package is not installed in your environment.",
+                "Caution: you set import_risk_tolerance='high', meaning your agent can import most packages. This might raise issues if the package is not installed in your environment.",
                 level=LogLevel.INFO,
             )
         self.executor_type = executor_type
@@ -1707,12 +1850,14 @@ class CodeAgent(MultiStepAgent):
 
         if self.executor_type == "local":
             return LocalPythonExecutor(
-                self.additional_authorized_imports,
+                risk_tolerance=self.import_risk_tolerance,
                 **{"max_print_outputs_length": self.max_print_outputs_length} | self.executor_kwargs,
             )
         else:
             if self.managed_agents:
                 raise Exception("Managed agents are not yet supported with remote code execution.")
+            # Remote executors still use additional_imports for now (they have their own systems)
+            # TODO: Update remote executors to use risk assessment in the future
             remote_executors = {
                 "blaxel": BlaxelExecutor,
                 "e2b": E2BExecutor,
@@ -1720,8 +1865,17 @@ class CodeAgent(MultiStepAgent):
                 "wasm": WasmExecutor,
                 "modal": ModalExecutor,
             }
+            # For remote executors, convert risk_tolerance to a list of allowed imports
+            # This is a temporary compatibility layer
+            from .import_risk import IMPORT_RISK_LEVELS
+            if self.import_risk_tolerance == "low":
+                allowed_imports = IMPORT_RISK_LEVELS["low"]
+            elif self.import_risk_tolerance == "medium":
+                allowed_imports = IMPORT_RISK_LEVELS["low"] + IMPORT_RISK_LEVELS["medium"]
+            else:  # high
+                allowed_imports = IMPORT_RISK_LEVELS["low"] + IMPORT_RISK_LEVELS["medium"] + IMPORT_RISK_LEVELS["high"]
             return remote_executors[self.executor_type](
-                self.additional_authorized_imports, self.logger, **self.executor_kwargs
+                allowed_imports, self.logger, **self.executor_kwargs
             )
 
     def initialize_system_prompt(self) -> str:
@@ -1731,9 +1885,10 @@ class CodeAgent(MultiStepAgent):
                 "tools": self.tools,
                 "managed_agents": self.managed_agents,
                 "authorized_imports": (
-                    "You can import from any package you want."
-                    if "*" in self.authorized_imports
-                    else str(self.authorized_imports)
+                    f"Import risk tolerance: {self.import_risk_tolerance.upper()}. "
+                    f"LOW risk modules (safe data processing) are always allowed. "
+                    f"{'MEDIUM risk modules (file/network access) are allowed with warnings. ' if self.import_risk_tolerance in ['medium', 'high'] else ''}"
+                    f"{'HIGH risk modules (system commands, code execution) are always blocked.' if self.import_risk_tolerance != 'high' else 'Most modules are allowed except extremely dangerous ones.'}"
                 ),
                 "custom_instructions": self.instructions,
                 "code_block_opening_tag": self.code_block_tags[0],
@@ -1780,14 +1935,56 @@ class CodeAgent(MultiStepAgent):
                 chat_message = agglomerate_stream_deltas(chat_message_stream_deltas)
                 memory_step.model_output_message = chat_message
                 output_text = chat_message.content
+                
+                # Detect and handle repetition
+                output_text, repetition_detected = self._detect_output_repetition(output_text)
+                if repetition_detected:
+                    # Update the chat message with truncated content
+                    chat_message.content = output_text
+                    memory_step.model_output_message = chat_message
             else:
-                chat_message: ChatMessage = self.action_model.generate(
-                    input_messages,
-                    stop_sequences=stop_sequences,
-                    **additional_args,
-                )
+                # Try to get from cache first (only for non-streaming)
+                cached_response = None
+                if hasattr(self, 'response_cache') and self.response_cache is not None:
+                    cached_response = self.response_cache.get(
+                        input_messages,
+                        stop_sequences=stop_sequences,
+                        **additional_args
+                    )
+                
+                if cached_response is not None:
+                    # Use cached response
+                    chat_message = cached_response
+                    self.logger.log(
+                        "[dim]Using cached model response[/dim]",
+                        level=LogLevel.DEBUG
+                    )
+                else:
+                    # Generate new response
+                    chat_message: ChatMessage = self.action_model.generate(
+                        input_messages,
+                        stop_sequences=stop_sequences,
+                        **additional_args,
+                    )
+                    # Cache the response
+                    if hasattr(self, 'response_cache') and self.response_cache is not None:
+                        self.response_cache.set(
+                            input_messages,
+                            chat_message,
+                            stop_sequences=stop_sequences,
+                            **additional_args
+                        )
+                
                 memory_step.model_output_message = chat_message
                 output_text = chat_message.content
+                
+                # Detect and handle repetition
+                output_text, repetition_detected = self._detect_output_repetition(output_text)
+                if repetition_detected:
+                    # Update the chat message with truncated content
+                    chat_message.content = output_text
+                    memory_step.model_output_message = chat_message
+                
                 self.logger.log_markdown(
                     content=output_text or "",
                     title="Output message of the LLM:",
@@ -1829,6 +2026,49 @@ class CodeAgent(MultiStepAgent):
 
         ### Execute action ###
         self.logger.log_code(title="Executing parsed code:", content=code_action, level=LogLevel.INFO)
+        
+        # Optional code validation (if available)
+        try:
+            # Try to import validation function from examples (optional dependency)
+            try:
+                from examples.publication_helpers import validate_code_for_executor
+            except ImportError:
+                try:
+                    import sys
+                    import os
+                    examples_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "examples")
+                    if examples_path not in sys.path:
+                        sys.path.insert(0, examples_path)
+                    from publication_helpers import validate_code_for_executor
+                except ImportError:
+                    validate_code_for_executor = None
+            
+            if validate_code_for_executor is not None:
+                is_valid, error_msg, warnings = validate_code_for_executor(code_action)
+                if not is_valid:
+                    # Log warnings if any
+                    if warnings:
+                        for warning in warnings:
+                            self.logger.log(f"[yellow]Validation warning: {warning}[/yellow]", level=LogLevel.INFO)
+                    # Raise error with detailed message
+                    raise AgentParsingError(
+                        f"Code validation failed before execution:\n{error_msg}\n\n"
+                        f"Please fix the code and try again.",
+                        self.logger
+                    )
+                elif warnings:
+                    # Log warnings but continue execution
+                    for warning in warnings:
+                        self.logger.log(f"[yellow]Validation warning: {warning}[/yellow]", level=LogLevel.INFO)
+        except AgentParsingError:
+            raise
+        except Exception as e:
+            # If validation itself fails, log but continue (don't block execution)
+            self.logger.log(
+                f"[yellow]Code validation check failed (continuing anyway): {type(e).__name__}: {e}[/yellow]",
+                level=LogLevel.WARNING
+            )
+        
         try:
             code_output = self.python_executor(code_action)
             execution_outputs_console = []
@@ -1849,9 +2089,11 @@ class CodeAgent(MultiStepAgent):
                     memory_step.observations = "Execution logs:\n" + execution_logs
                     self.logger.log(Group(*execution_outputs_console), level=LogLevel.INFO)
             error_msg = str(e)
-            if "Import of " in error_msg and " is not allowed" in error_msg:
+            if "Import" in error_msg and ("blocked" in error_msg or "HIGH RISK" in error_msg or "MEDIUM RISK" in error_msg):
                 self.logger.log(
-                    "[bold red]Warning to user: Code execution failed due to an unauthorized import - Consider passing said import under `additional_authorized_imports` when initializing your CodeAgent.",
+                    "[bold red]Warning to user: Code execution failed due to import risk restrictions. "
+                    f"Current risk tolerance: {self.import_risk_tolerance}. "
+                    "Consider setting import_risk_tolerance='medium' or 'high' if you need more permissive imports.",
                     level=LogLevel.INFO,
                 )
             raise AgentExecutionError(error_msg, self.logger)
@@ -1877,7 +2119,7 @@ class CodeAgent(MultiStepAgent):
             `dict`: Dictionary representation of the agent.
         """
         agent_dict = super().to_dict()
-        agent_dict["authorized_imports"] = self.authorized_imports
+        agent_dict["import_risk_tolerance"] = self.import_risk_tolerance
         agent_dict["executor_type"] = self.executor_type
         agent_dict["executor_kwargs"] = self.executor_kwargs
         agent_dict["max_print_outputs_length"] = self.max_print_outputs_length
@@ -1895,8 +2137,20 @@ class CodeAgent(MultiStepAgent):
             `CodeAgent`: Instance of the CodeAgent class.
         """
         # Add CodeAgent-specific parameters to kwargs
+        # Handle backward compatibility: if authorized_imports exists, convert to risk_tolerance
+        if "authorized_imports" in agent_dict and "import_risk_tolerance" not in agent_dict:
+            # Legacy: convert authorized_imports list to risk_tolerance
+            # If it contains "*", use "high", otherwise "medium"
+            authorized = agent_dict.get("authorized_imports", [])
+            if isinstance(authorized, list) and "*" in authorized:
+                risk_tolerance = "high"
+            else:
+                risk_tolerance = "medium"
+        else:
+            risk_tolerance = agent_dict.get("import_risk_tolerance", "medium")
+        
         code_agent_kwargs = {
-            "additional_authorized_imports": agent_dict.get("authorized_imports"),
+            "import_risk_tolerance": risk_tolerance,
             "executor_type": agent_dict.get("executor_type"),
             "executor_kwargs": agent_dict.get("executor_kwargs"),
             "max_print_outputs_length": agent_dict.get("max_print_outputs_length"),
