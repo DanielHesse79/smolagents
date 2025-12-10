@@ -1382,10 +1382,104 @@ def main():
                     ],
                 )
             
+            # Model Selection Tab
+            with gr.Tab("🤖 Model Selection") as model_selection_tab:
+                gr.Markdown("## Select LLM Models")
+                gr.Markdown("Choose the models to use for the programming agent and manager agent.")
+                
+                # Check if agents are already initialized
+                agents_ready = _global_manager_agent is not None and _global_programming_agent is not None
+                
+                if startup_result.ollama.get("available", False) and _global_available_models:
+                    available_models = _global_available_models
+                    
+                    # Load saved preferences for default values
+                    saved_prefs = load_model_preferences()
+                    default_prog = saved_prefs.get("programming_model", available_models[0] if available_models else None)
+                    default_mgr = saved_prefs.get("manager_model", available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None))
+                    
+                    # Ensure defaults are in available models
+                    if default_prog not in available_models:
+                        default_prog = available_models[0] if available_models else None
+                    if default_mgr not in available_models:
+                        default_mgr = available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None)
+                    
+                    with gr.Row():
+                        programming_model_dropdown = gr.Dropdown(
+                            label="Programming Agent Model",
+                            choices=available_models,
+                            value=default_prog,
+                            info="Model used for code generation and programming tasks",
+                            interactive=not agents_ready,
+                        )
+                        
+                        manager_model_dropdown = gr.Dropdown(
+                            label="Manager Agent Model",
+                            choices=available_models,
+                            value=default_mgr,
+                            info="Model used for task planning and delegation",
+                            interactive=not agents_ready,
+                        )
+                    
+                    model_status = gr.Markdown()
+                    
+                    def initialize_with_selected_models(prog_model, mgr_model):
+                        """Initialize agents with selected models."""
+                        if not prog_model or not mgr_model:
+                            return "❌ Please select both models", gr.update(visible=True)
+                        
+                        if prog_model == mgr_model:
+                            return "⚠️ Warning: Using the same model for both agents is not recommended", gr.update(visible=True)
+                        
+                        success, message = initialize_agents_with_models(
+                            prog_model, 
+                            mgr_model, 
+                            startup_result, 
+                            config
+                        )
+                        
+                        if success:
+                            # Update global available models list
+                            global _global_available_models
+                            _global_available_models = available_models
+                            
+                            return message, gr.update(visible=False)
+                        else:
+                            return message, gr.update(visible=True)
+                    
+                    init_btn = gr.Button("🚀 Initialize Agents", variant="primary", visible=not agents_ready)
+                    init_status = gr.Markdown()
+                    
+                    if agents_ready:
+                        gr.Markdown(f"### ✅ Agents Already Initialized")
+                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
+                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
+                        gr.Markdown("\nTo change models, restart the application.")
+                    else:
+                        gr.Markdown("### ⚠️ Model Selection Required")
+                        gr.Markdown("Please select models and click 'Initialize Agents' to start using the application.")
+                    
+                    init_btn.click(
+                        fn=initialize_with_selected_models,
+                        inputs=[programming_model_dropdown, manager_model_dropdown],
+                        outputs=[init_status, init_btn]
+                    )
+                    
+                elif not startup_result.ollama.get("available", False):
+                    gr.Markdown("### ❌ Ollama Not Available")
+                    gr.Markdown("Ollama is not running or not accessible. Please start Ollama to select models.")
+                    if agents_ready:
+                        gr.Markdown(f"### ✅ Using API Models")
+                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
+                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
+                else:
+                    gr.Markdown("### ⚠️ No Models Available")
+                    gr.Markdown("No Ollama models found. Please install models using `ollama pull <model_name>`")
+            
             # Chat Tab
             with gr.Tab("Chat"):
-                chat_container = gr.Column(visible=manager_agent is not None)
-                init_container = gr.Column(visible=manager_agent is None)
+                chat_container = gr.Column(visible=_global_manager_agent is not None)
+                init_container = gr.Column(visible=_global_manager_agent is None)
                 
                 with init_container:
                     gr.Markdown("## ⚠️ Agents not initialized")
@@ -1412,7 +1506,24 @@ def main():
                         
                         # Setup models
                         if result.ollama["available"]:
-                            programming_model, manager_model = setup_ollama_models(result.ollama, cfg)
+                            # Try to use saved preferences
+                            saved_prefs = load_model_preferences()
+                            prog_model = saved_prefs.get("programming_model")
+                            mgr_model = saved_prefs.get("manager_model")
+                            
+                            # Validate saved models are still available
+                            available_models = result.ollama.get("models", [])
+                            if prog_model not in available_models:
+                                prog_model = None
+                            if mgr_model not in available_models:
+                                mgr_model = None
+                            
+                            programming_model, manager_model = setup_ollama_models(
+                                result.ollama, 
+                                cfg,
+                                programming_model_name=prog_model,
+                                manager_model_name=mgr_model
+                            )
                         else:
                             programming_model, manager_model = setup_api_models()
                         
@@ -1454,7 +1565,7 @@ def main():
                     )
                 
                 with chat_container:
-                    if manager_agent and programming_agent:
+                    if _global_manager_agent and _global_programming_agent:
                         # Create chat interface inline (ChatInterface works better when created in context)
                         gr.Markdown("### Chat with the agents")
                         
