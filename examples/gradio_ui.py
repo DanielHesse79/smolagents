@@ -21,6 +21,17 @@ import traceback
 import json
 from typing import Optional, Generator, Dict, Any
 
+# Fix Unicode encoding issues on Windows
+if sys.platform == "win32":
+    import io
+    # Set UTF-8 encoding for stdout/stderr
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    # Set environment variable for subprocesses
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+
 # Add project root and src to path for local imports during development
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
@@ -127,6 +138,7 @@ from examples.shared_agent_utils import (
     initialize_qdrant_client,
     initialize_sqlite_db,
     setup_ollama_models,
+    create_unicode_safe_logger,
     setup_api_models,
     create_programming_agent,
     StartupConfig,
@@ -809,11 +821,15 @@ def create_manager_agent_gradio(
         
         print("[OK] PubMed search tool and error/researcher tools added to manager agent")
     
+    # Create Unicode-safe logger for Windows compatibility
+    logger = create_unicode_safe_logger(verbosity_level=1)
+    
     manager_agent = CodeAgent(
         tools=manager_tools,
         model=model,
         managed_agents=managed_agents,
         verbosity_level=1,
+        logger=logger,  # Use custom logger with Unicode-safe console
         planning_interval=3,
         stream_outputs=True,
         max_steps=20,
@@ -1412,168 +1428,177 @@ def main():
                                     return
                                 
                                 # Maximum input length (configurable via AGENT_MAX_INPUT_LENGTH env var)
-                            MAX_TOTAL_INPUT = int(os.getenv("AGENT_MAX_INPUT_LENGTH", "50000"))
-                            MAX_DOC_CONTENT = MAX_TOTAL_INPUT - len(message) - 2000  # Reserve 2000 chars for metadata/paths
-                            
-                            # If Open Deep Research is requested, add it to agent
-                            if use_open_deep_research and OPEN_DEEP_RESEARCH_AVAILABLE:
-                                has_odr = False
-                                if hasattr(agent, 'managed_agents'):
-                                    for ma in agent.managed_agents:
-                                        if hasattr(ma, 'name') and ma.name == 'search_agent':
-                                            has_odr = True
-                                            break
+                                MAX_TOTAL_INPUT = int(os.getenv("AGENT_MAX_INPUT_LENGTH", "50000"))
+                                MAX_DOC_CONTENT = MAX_TOTAL_INPUT - len(message) - 2000  # Reserve 2000 chars for metadata/paths
                                 
-                                if not has_odr:
-                                    try:
-                                        odr_agent = create_open_deep_research_agent(agent.model)
-                                        if odr_agent:
-                                            agent.managed_agents.append(odr_agent)
-                                            _global_manager_agent = agent
-                                    except Exception as e:
-                                        yield f"⚠️ Could not enable Open Deep Research: {str(e)}\n\n"
-                            
-                            # Handle model change
-                            # Convert empty string to None for selected_model
-                            if selected_model == "":
-                                selected_model = None
-                            if selected_model and _global_startup_result and _global_startup_result.ollama["available"]:
-                                try:
-                                    new_model = create_model_from_name(selected_model, _global_startup_result.ollama.get("url", "http://localhost:11434"), _global_startup_config)
-                                    agent.model = new_model
-                                    _global_manager_agent = agent
-                                except Exception as e:
-                                    yield f"Error switching model: {str(e)}\n\n"
-                            
-                            # Prepare task with file content reading
-                            task = message
-                            file_contents = []
-                            file_summaries = []
-                            
-                            # Process uploaded files - read PDF/document content
-                            if files:
-                                saved_paths = []
-                                total_content_chars = 0
-                                
-                                for file in files:
-                                    if file:
-                                        import tempfile
-                                        import shutil
-                                        temp_path = tempfile.mktemp(suffix=os.path.splitext(file.name)[1])
-                                        shutil.copy(file.name, temp_path)
-                                        saved_paths.append(temp_path)
-                                        
-                                        # Read document content
-                                        ext = os.path.splitext(file.name)[1].lower()
-                                        if ext in [".pdf", ".docx", ".txt"]:
-                                            try:
-                                                content = _global_document_reader.forward(temp_path)
-                                                if content and not content.startswith("Error"):
-                                                    original_len = len(content)
-                                                    remaining_space = MAX_DOC_CONTENT - total_content_chars
-                                                    
-                                                    if remaining_space <= 0:
-                                                        file_summaries.append(f"- {os.path.basename(file.name)}: [Skipped - input limit reached, {original_len} chars]")
-                                                        continue
-                                                    
-                                                    # Smart truncation
-                                                    if len(content) > remaining_space:
-                                                        first_part_len = int(remaining_space * 0.7)
-                                                        last_part_len = int(remaining_space * 0.2)
-                                                        first_part = content[:first_part_len]
-                                                        last_part = content[-last_part_len:] if last_part_len > 0 else ""
-                                                        content = (
-                                                            first_part + 
-                                                            f"\n\n... [MIDDLE SECTION OMITTED - {original_len - first_part_len - last_part_len} chars] ...\n\n" +
-                                                            last_part
-                                                        )
-                                                        file_summaries.append(f"- {os.path.basename(file.name)}: {original_len} chars (truncated to fit)")
-                                                    else:
-                                                        file_summaries.append(f"- {os.path.basename(file.name)}: {original_len} chars (full content)")
-                                                    
-                                                    file_contents.append(f"\n\n--- Content of {os.path.basename(file.name)} ---\n{content}\n--- End of {os.path.basename(file.name)} ---")
-                                                    total_content_chars += len(content)
-                                            except Exception as e:
-                                                file_summaries.append(f"- {os.path.basename(file.name)}: [Error: {str(e)}]")
-                                
-                                if saved_paths:
-                                    task += f"\n\nFiles provided: {', '.join(saved_paths)}"
-                                if file_summaries:
-                                    task += f"\n\n📄 **Document Status:**\n" + "\n".join(file_summaries)
-                                if file_contents:
-                                    task += "\n".join(file_contents)
-                            
-                            # Prepare images and auto-select vision model if needed
-                            task_images = None
-                            vision_agent = None
-                            
-                            if images:
-                                from PIL import Image
-                                task_images = []
-                                for img in images:
-                                    if isinstance(img, Image.Image):
-                                        task_images.append(img)
-                            
-                                # Use vision model when images are provided
-                                if task_images and _global_vision_models:
-                                    vision_model_name = _global_vision_models[0]
-                                    yield f"📸 Image detected! Creating vision agent with **{vision_model_name}**...\n\n"
+                                # If Open Deep Research is requested, add it to agent
+                                if use_open_deep_research and OPEN_DEEP_RESEARCH_AVAILABLE:
+                                    has_odr = False
+                                    if hasattr(agent, 'managed_agents'):
+                                        for ma in agent.managed_agents:
+                                            if hasattr(ma, 'name') and ma.name == 'search_agent':
+                                                has_odr = True
+                                                break
                                     
-                                    try:
-                                        base_url = _global_startup_result.ollama.get("url", "http://localhost:11434") if _global_startup_result else "http://localhost:11434"
-                                        vision_model = create_model_from_name(vision_model_name, base_url, _global_startup_config)
-                                        
-                                        vision_agent = CodeAgent(
-                                            tools=[],
-                                            model=vision_model,
-                                            max_steps=5,
-                                            verbosity_level=1,
-                                            import_risk_tolerance="medium",
-                                            instructions="You are a vision assistant. Analyze images and describe what you see in detail. Extract any text, data, or relevant information from images.",
-                                        )
-                                        yield f"✅ Vision agent ready with **{vision_model_name}**\n\nAnalyzing image...\n\n"
-                                    except Exception as e:
-                                        yield f"⚠️ Could not create vision agent: {e}\n\nFalling back to text-only processing...\n\n"
-                                        vision_agent = None
-                            
-                            # Stream response - use vision agent for images if available
-                            response = ""
-                            try:
-                                # If we have images and a vision agent, use it first
-                                if task_images and vision_agent:
-                                    yield "🔍 **Vision Analysis (Qwen VL):**\n\n"
-                                    try:
-                                        vision_result = vision_agent.run(task, images=task_images)
-                                        vision_response = str(vision_result) if vision_result else "No analysis available"
-                                        response = f"**Image Analysis:**\n{vision_response}\n\n---\n\n"
-                                        yield response
-                                        
-                                        # Pass vision analysis to main agent
-                                        task = f"{message}\n\n**Image Analysis from Vision Model:**\n{vision_response}"
-                                        task_images = None  # Don't pass images again
-                                    except Exception as e:
-                                        response = f"⚠️ Vision analysis error: {e}\n\n"
-                                        yield response
+                                    if not has_odr:
+                                        try:
+                                            odr_agent = create_open_deep_research_agent(agent.model)
+                                            if odr_agent:
+                                                agent.managed_agents.append(odr_agent)
+                                                _global_manager_agent = agent
+                                        except Exception as e:
+                                            yield f"⚠️ Could not enable Open Deep Research: {str(e)}\n\n"
                                 
-                                # Now run the main agent
-                                if agent:
-                                    yield response + "🤖 **Processing with DeepSeek (via Manager):**\n\n"
-                                    max_steps = getattr(agent, "max_steps", None)
-                                    for chunk in stream_to_gradio(
-                                        agent=agent,
-                                        task=task,
-                                        task_images=task_images,
-                                        reset_agent_memory=False,
-                                        max_steps=max_steps,
-                                    ):
-                                        response, chunk_output = process_stream_chunk(chunk, response)
-                                        yield chunk_output
+                                # Handle model change
+                                # Convert empty string to None for selected_model
+                                if selected_model == "":
+                                    selected_model = None
+                                if selected_model and _global_startup_result and _global_startup_result.ollama["available"]:
+                                    try:
+                                        new_model = create_model_from_name(selected_model, _global_startup_result.ollama.get("url", "http://localhost:11434"), _global_startup_config)
+                                        agent.model = new_model
+                                        _global_manager_agent = agent
+                                    except Exception as e:
+                                        yield f"Error switching model: {str(e)}\n\n"
+                                
+                                # Prepare task with file content reading
+                                task = message
+                                file_contents = []
+                                file_summaries = []
+                                
+                                # Process uploaded files - read PDF/document content
+                                if files:
+                                    saved_paths = []
+                                    total_content_chars = 0
+                                    
+                                    for file in files:
+                                        if file:
+                                            import tempfile
+                                            import shutil
+                                            temp_path = tempfile.mktemp(suffix=os.path.splitext(file.name)[1])
+                                            shutil.copy(file.name, temp_path)
+                                            saved_paths.append(temp_path)
+                                            
+                                            # Read document content
+                                            ext = os.path.splitext(file.name)[1].lower()
+                                            if ext in [".pdf", ".docx", ".txt"]:
+                                                try:
+                                                    content = _global_document_reader.forward(temp_path)
+                                                    if content and not content.startswith("Error"):
+                                                        original_len = len(content)
+                                                        remaining_space = MAX_DOC_CONTENT - total_content_chars
+                                                        
+                                                        if remaining_space <= 0:
+                                                            file_summaries.append(f"- {os.path.basename(file.name)}: [Skipped - input limit reached, {original_len} chars]")
+                                                            continue
+                                                        
+                                                        # Smart truncation
+                                                        if len(content) > remaining_space:
+                                                            first_part_len = int(remaining_space * 0.7)
+                                                            last_part_len = int(remaining_space * 0.2)
+                                                            first_part = content[:first_part_len]
+                                                            last_part = content[-last_part_len:] if last_part_len > 0 else ""
+                                                            content = (
+                                                                first_part + 
+                                                                f"\n\n... [MIDDLE SECTION OMITTED - {original_len - first_part_len - last_part_len} chars] ...\n\n" +
+                                                                last_part
+                                                            )
+                                                            file_summaries.append(f"- {os.path.basename(file.name)}: {original_len} chars (truncated to fit)")
+                                                        else:
+                                                            file_summaries.append(f"- {os.path.basename(file.name)}: {original_len} chars (full content)")
+                                                        
+                                                        file_contents.append(f"\n\n--- Content of {os.path.basename(file.name)} ---\n{content}\n--- End of {os.path.basename(file.name)} ---")
+                                                        total_content_chars += len(content)
+                                                except Exception as e:
+                                                    file_summaries.append(f"- {os.path.basename(file.name)}: [Error: {str(e)}]")
+                                    
+                                    if saved_paths:
+                                        task += f"\n\nFiles provided: {', '.join(saved_paths)}"
+                                    if file_summaries:
+                                        task += f"\n\n📄 **Document Status:**\n" + "\n".join(file_summaries)
+                                    if file_contents:
+                                        task += "\n".join(file_contents)
+                                
+                                # Prepare images and auto-select vision model if needed
+                                task_images = None
+                                vision_agent = None
+                                
+                                if images:
+                                    from PIL import Image
+                                    task_images = []
+                                    for img in images:
+                                        if isinstance(img, Image.Image):
+                                            task_images.append(img)
+                                
+                                    # Use vision model when images are provided
+                                    if task_images and _global_vision_models:
+                                        vision_model_name = _global_vision_models[0]
+                                        yield f"📸 Image detected! Creating vision agent with **{vision_model_name}**...\n\n"
+                                        
+                                        try:
+                                            base_url = _global_startup_result.ollama.get("url", "http://localhost:11434") if _global_startup_result else "http://localhost:11434"
+                                            vision_model = create_model_from_name(vision_model_name, base_url, _global_startup_config)
+                                            
+                                            vision_agent = CodeAgent(
+                                                tools=[],
+                                                model=vision_model,
+                                                max_steps=5,
+                                                verbosity_level=1,
+                                                import_risk_tolerance="medium",
+                                                instructions="You are a vision assistant. Analyze images and describe what you see in detail. Extract any text, data, or relevant information from images.",
+                                            )
+                                            yield f"✅ Vision agent ready with **{vision_model_name}**\n\nAnalyzing image...\n\n"
+                                        except Exception as e:
+                                            yield f"⚠️ Could not create vision agent: {e}\n\nFalling back to text-only processing...\n\n"
+                                            vision_agent = None
+                                
+                                # Stream response - use vision agent for images if available
+                                response = ""
+                                try:
+                                    # If we have images and a vision agent, use it first
+                                    if task_images and vision_agent:
+                                        yield "🔍 **Vision Analysis (Qwen VL):**\n\n"
+                                        try:
+                                            vision_result = vision_agent.run(task, images=task_images)
+                                            vision_response = str(vision_result) if vision_result else "No analysis available"
+                                            response = f"**Image Analysis:**\n{vision_response}\n\n---\n\n"
+                                            yield response
+                                            
+                                            # Pass vision analysis to main agent
+                                            task = f"{message}\n\n**Image Analysis from Vision Model:**\n{vision_response}"
+                                            task_images = None  # Don't pass images again
+                                        except Exception as e:
+                                            response = f"⚠️ Vision analysis error: {e}\n\n"
+                                            yield response
+                                    
+                                    # Now run the main agent
+                                    if agent:
+                                        yield response + "🤖 **Processing with DeepSeek (via Manager):**\n\n"
+                                        max_steps = getattr(agent, "max_steps", None)
+                                        for chunk in stream_to_gradio(
+                                            agent=agent,
+                                            task=task,
+                                            task_images=task_images,
+                                            reset_agent_memory=False,
+                                            max_steps=max_steps,
+                                        ):
+                                            response, chunk_output = process_stream_chunk(chunk, response)
+                                            yield chunk_output
+                                except Exception as e:
+                                    import traceback as tb
+                                    error_msg = f"❌ **Error:** {str(e)}\n\n```python\n{tb.format_exc()}\n```"
+                                    yield error_msg
+                                    import sys
+                                    print(f"[ERROR] Chat function error: {e}", file=sys.stderr)
+                                    tb.print_exc()
                             except Exception as e:
-                                error_msg = f"❌ **Error:** {str(e)}\n\n```python\n{traceback.format_exc()}\n```"
-                                yield error_msg
+                                # Catch any errors at the top level
+                                import traceback as tb
                                 import sys
-                                print(f"[ERROR] Chat function error: {e}", file=sys.stderr)
-                                traceback.print_exc()
+                                error_msg = f"❌ **Unexpected Error:** {str(e)}\n\nPlease check the terminal for more details."
+                                yield error_msg
+                                print(f"[ERROR] Chat function top-level error: {e}", file=sys.stderr)
+                                tb.print_exc()
                         
                         # Additional inputs - ORDER MUST MATCH chat_fn parameters!
                         # chat_fn signature: (message, history, files, images, selected_model, use_open_deep_research)

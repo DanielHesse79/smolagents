@@ -951,6 +951,36 @@ def setup_api_models():
 # Agent Creation Functions
 # ============================================================================
 
+def create_unicode_safe_logger(verbosity_level=1):
+    """Create an AgentLogger with Unicode-safe console for Windows compatibility.
+    
+    This logger uses a console that writes to a null file on Windows to avoid
+    Unicode encoding errors with Rich's Live display. Since we're streaming
+    to Gradio, we don't need Rich's console output anyway.
+    """
+    import sys
+    import io
+    from smolagents.monitoring import AgentLogger, LogLevel
+    from rich.console import Console
+    
+    # Create a console that handles Unicode properly on Windows
+    if sys.platform == "win32":
+        # Use a StringIO buffer with UTF-8 encoding to avoid Windows console encoding issues
+        # Since we're streaming to Gradio, we don't need Rich's console output
+        # StringIO automatically handles encoding and doesn't need to be closed
+        buffer = io.StringIO()
+        console = Console(
+            file=buffer,
+            highlight=False,
+            force_terminal=False,  # Disable terminal-specific features
+            legacy_windows=False,  # Use modern Windows rendering
+            width=None,  # Auto-detect width
+        )
+    else:
+        console = Console(highlight=False)
+    
+    return AgentLogger(level=verbosity_level, console=console)
+
 def create_programming_agent(
     model,
     memory_backend,
@@ -977,12 +1007,16 @@ def create_programming_agent(
         print("[OK] Publication tools and error/researcher tools added to programming agent")
     
     try:
+        # Create Unicode-safe logger for Windows compatibility
+        logger = create_unicode_safe_logger(verbosity_level=1)
+        
         programming_agent = CodeAgent(
             tools=programming_tools,
             model=model,
             name="programmer",
             description="A specialized programming agent that writes, debugs, and executes code. Use this agent when you need to write Python code, solve programming problems, create scripts, or perform computational tasks.",
             verbosity_level=1,
+            logger=logger,  # Use custom logger with Unicode-safe console
             stream_outputs=True,
             max_steps=50,
             memory_backend=memory_backend,
