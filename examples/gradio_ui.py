@@ -29,8 +29,13 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     if hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-    # Set environment variable for subprocesses
+    # Set environment variables for subprocesses and Rich
     os.environ['PYTHONIOENCODING'] = 'utf-8'
+    # Prevent Rich from detecting Windows terminal
+    os.environ['NO_COLOR'] = '1'
+    os.environ['TERM'] = 'dumb'
+    # Disable Rich's Windows terminal detection
+    os.environ['FORCE_COLOR'] = '0'
 
 # Add project root and src to path for local imports during development
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -736,11 +741,16 @@ def create_open_deep_research_agent(model, text_limit=100000):
         TextInspectorTool(model, text_limit),
     ]
     
+    # Create Unicode-safe loggers for Windows compatibility
+    search_logger = create_unicode_safe_logger(verbosity_level=2)
+    odr_manager_logger = create_unicode_safe_logger(verbosity_level=2)
+    
     search_agent = ToolCallingAgent(
         model=model,
         tools=web_tools,
         max_steps=20,
         verbosity_level=2,
+        logger=search_logger,  # Use custom logger with Unicode-safe console
         planning_interval=4,
         name="search_agent",
         description="""A team member that will search the internet to answer your question.
@@ -761,6 +771,7 @@ def create_open_deep_research_agent(model, text_limit=100000):
         tools=[visualizer, TextInspectorTool(model, text_limit)] if OPEN_DEEP_RESEARCH_AVAILABLE else [],
         max_steps=12,
         verbosity_level=2,
+        logger=odr_manager_logger,  # Use custom logger with Unicode-safe console
         import_risk_tolerance="high",  # Manager needs flexibility for Open Deep Research
         planning_interval=4,
         managed_agents=[search_agent],
@@ -1526,9 +1537,31 @@ def main():
                                 if images:
                                     from PIL import Image
                                     task_images = []
-                                    for img in images:
-                                        if isinstance(img, Image.Image):
-                                            task_images.append(img)
+                                    # Handle both single Image object and list of images
+                                    if isinstance(images, Image.Image):
+                                        # Single image - wrap in list
+                                        task_images = [images]
+                                    elif isinstance(images, (list, tuple)):
+                                        # List of images - process each one
+                                        for img in images:
+                                            if isinstance(img, Image.Image):
+                                                task_images.append(img)
+                                    # If task_images is still empty, images might be in a different format
+                                    if not task_images and images:
+                                        # Try to convert if it's a file path or other format
+                                        try:
+                                            if isinstance(images, str):
+                                                task_images = [Image.open(images)]
+                                            elif hasattr(images, '__iter__') and not isinstance(images, (str, bytes)):
+                                                # It's iterable but not an Image - try to process
+                                                for item in images:
+                                                    if isinstance(item, Image.Image):
+                                                        task_images.append(item)
+                                                    elif isinstance(item, str):
+                                                        task_images.append(Image.open(item))
+                                        except Exception:
+                                            # If conversion fails, just skip images
+                                            task_images = None
                                 
                                     # Use vision model when images are provided
                                     if task_images and _global_vision_models:
@@ -1539,11 +1572,15 @@ def main():
                                             base_url = _global_startup_result.ollama.get("url", "http://localhost:11434") if _global_startup_result else "http://localhost:11434"
                                             vision_model = create_model_from_name(vision_model_name, base_url, _global_startup_config)
                                             
+                                            # Create Unicode-safe logger for Windows compatibility
+                                            vision_logger = create_unicode_safe_logger(verbosity_level=1)
+                                            
                                             vision_agent = CodeAgent(
                                                 tools=[],
                                                 model=vision_model,
                                                 max_steps=5,
                                                 verbosity_level=1,
+                                                logger=vision_logger,  # Use custom logger with Unicode-safe console
                                                 import_risk_tolerance="medium",
                                                 instructions="You are a vision assistant. Analyze images and describe what you see in detail. Extract any text, data, or relevant information from images.",
                                             )

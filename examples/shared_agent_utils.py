@@ -954,34 +954,63 @@ def setup_api_models():
 def create_unicode_safe_logger(verbosity_level=1):
     """Create an AgentLogger with Unicode-safe console for Windows compatibility.
     
-    This logger uses a console that writes to a file with UTF-8 encoding on Windows
-    to avoid Unicode encoding errors with Rich's Live display. Since we're streaming
-    to Gradio, we don't need Rich's console output anyway.
+    This logger uses a console that writes to a custom file object on Windows
+    that Rich won't detect as a terminal, avoiding Unicode encoding errors.
+    Since we're streaming to Gradio, we don't need Rich's console output anyway.
     """
     import sys
     import io
-    import tempfile
     from smolagents.monitoring import AgentLogger, LogLevel
     from rich.console import Console
     
     # Create a console that handles Unicode properly on Windows
     if sys.platform == "win32":
-        # Create a temporary file with UTF-8 encoding that Rich won't detect as a terminal
-        # This prevents Rich from trying to use Windows terminal rendering
-        utf8_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', errors='replace', delete=False)
-        utf8_file.close()  # Close the file handle, but keep the file
+        # Use os.devnull opened with UTF-8 encoding - this is a real file, not a terminal
+        # Rich won't try to use Windows terminal rendering on a file
+        null_file = open(os.devnull, 'w', encoding='utf-8', errors='replace')
         
-        # Reopen in append mode so Rich can write to it
-        utf8_file = open(utf8_file.name, 'w', encoding='utf-8', errors='replace')
-        
+        # Create console that won't use Windows terminal rendering
+        # Environment variables are already set globally in gradio_ui.py
         console = Console(
-            file=utf8_file,
+            file=null_file,
             highlight=False,
             force_terminal=False,  # Disable terminal-specific features
-            legacy_windows=False,  # Use modern Windows rendering
+            legacy_windows=False,  # Disable legacy Windows rendering
             width=None,  # Auto-detect width
-            _environ={},  # Don't use environment variables that might enable terminal features
+            _environ={},  # Don't use environment variables for terminal detection
         )
+        
+        # Monkey-patch Rich's Windows rendering to prevent Unicode errors
+        # Patch the _write_buffer method to catch and ignore Unicode errors
+        import types
+        original_write_buffer = console._write_buffer
+        
+        def safe_write_buffer(self):
+            try:
+                # Try to write, but catch Unicode errors
+                original_write_buffer()
+            except (UnicodeEncodeError, AttributeError, OSError):
+                # If Unicode error occurs, just skip the write
+                # We don't need the output anyway since we're streaming to Gradio
+                # Clear the buffer to prevent retries
+                if hasattr(self, '_buffer'):
+                    self._buffer = []
+        
+        console._write_buffer = types.MethodType(safe_write_buffer, console)
+        
+        # Also patch Rich's legacy_windows_render function globally to prevent it from being called
+        try:
+            from rich import _windows_renderer
+            original_legacy_windows_render = _windows_renderer.legacy_windows_render
+            
+            def safe_legacy_windows_render(buffer, term):
+                # Just skip Windows rendering - we don't need it for Gradio
+                pass
+            
+            _windows_renderer.legacy_windows_render = safe_legacy_windows_render
+        except (ImportError, AttributeError):
+            # If we can't patch it, that's okay - the _write_buffer patch should catch it
+            pass
     else:
         console = Console(highlight=False)
     
