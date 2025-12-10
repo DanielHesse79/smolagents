@@ -1778,15 +1778,16 @@ def main():
                         
                         if success:
                             # Update global available models list
-                            global _global_available_models
+                            global _global_available_models, _global_manager_agent, _global_programming_agent
                             _global_available_models = available_models
                             
+                            # Hide button when successful, status will be hidden automatically
                             return message, gr.update(visible=False)
                         else:
                             return message, gr.update(visible=True)
                     
                     init_btn = gr.Button("🚀 Initialize Agents", variant="primary", visible=not agents_ready)
-                    init_status = gr.Markdown()
+                    init_status = gr.Markdown(visible=not agents_ready)
                     
                     if agents_ready:
                         gr.Markdown(f"### ✅ Agents Already Initialized")
@@ -1795,7 +1796,7 @@ def main():
                         gr.Markdown("\nTo change models, restart the application.")
                     else:
                         gr.Markdown("### ⚠️ Model Selection Required")
-                        gr.Markdown("Please select models and click 'Initialize Agents' to start using the application.")
+                        gr.Markdown("Please select models and click '🚀 Initialize Agents' button above to start using the application.")
                     
                     init_btn.click(
                         fn=initialize_with_selected_models,
