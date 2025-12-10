@@ -954,27 +954,33 @@ def setup_api_models():
 def create_unicode_safe_logger(verbosity_level=1):
     """Create an AgentLogger with Unicode-safe console for Windows compatibility.
     
-    This logger uses a console that writes to a null file on Windows to avoid
-    Unicode encoding errors with Rich's Live display. Since we're streaming
+    This logger uses a console that writes to a file with UTF-8 encoding on Windows
+    to avoid Unicode encoding errors with Rich's Live display. Since we're streaming
     to Gradio, we don't need Rich's console output anyway.
     """
     import sys
     import io
+    import tempfile
     from smolagents.monitoring import AgentLogger, LogLevel
     from rich.console import Console
     
     # Create a console that handles Unicode properly on Windows
     if sys.platform == "win32":
-        # Use a StringIO buffer with UTF-8 encoding to avoid Windows console encoding issues
-        # Since we're streaming to Gradio, we don't need Rich's console output
-        # StringIO automatically handles encoding and doesn't need to be closed
-        buffer = io.StringIO()
+        # Create a temporary file with UTF-8 encoding that Rich won't detect as a terminal
+        # This prevents Rich from trying to use Windows terminal rendering
+        utf8_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', errors='replace', delete=False)
+        utf8_file.close()  # Close the file handle, but keep the file
+        
+        # Reopen in append mode so Rich can write to it
+        utf8_file = open(utf8_file.name, 'w', encoding='utf-8', errors='replace')
+        
         console = Console(
-            file=buffer,
+            file=utf8_file,
             highlight=False,
             force_terminal=False,  # Disable terminal-specific features
             legacy_windows=False,  # Use modern Windows rendering
             width=None,  # Auto-detect width
+            _environ={},  # Don't use environment variables that might enable terminal features
         )
     else:
         console = Console(highlight=False)
