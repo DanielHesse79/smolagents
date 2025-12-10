@@ -131,6 +131,8 @@ from examples.shared_agent_utils import (
     create_programming_agent,
     StartupConfig,
     StartupResult,
+    load_model_preferences,
+    save_model_preferences,
 )
 # Note: We use create_manager_agent_gradio instead of create_manager_agent
 
@@ -1097,6 +1099,57 @@ def create_agent_functions_tab():
         
         export_dict_btn.click(fn=export_to_dict, outputs=[export_dict_display])
         visualize_btn.click(fn=visualize_tree, outputs=[visualize_status])
+
+
+# ============================================================================
+# Agent Initialization Function
+# ============================================================================
+
+def initialize_agents_with_models(programming_model_name: str, manager_model_name: str, startup_result: StartupResult, config: StartupConfig):
+    """Initialize agents with selected models."""
+    global _global_manager_agent, _global_programming_agent
+    global _global_current_programming_model, _global_current_manager_model
+    
+    try:
+        # Setup models
+        if startup_result.ollama["available"]:
+            programming_model, manager_model = setup_ollama_models(
+                startup_result.ollama, 
+                config,
+                programming_model_name=programming_model_name,
+                manager_model_name=manager_model_name
+            )
+            _global_current_programming_model = programming_model.model_id.replace("ollama_chat/", "")
+            _global_current_manager_model = manager_model.model_id.replace("ollama_chat/", "")
+        else:
+            programming_model, manager_model = setup_api_models()
+            _global_current_programming_model = "API Model"
+            _global_current_manager_model = "API Model"
+        
+        # Create agents
+        programming_agent = create_programming_agent(
+            model=programming_model,
+            memory_backend=_global_memory_backend,
+            db_path=_global_db_path,
+            qdrant_collection_name="microsampling_publications"
+        )
+        
+        manager_agent = create_manager_agent_gradio(
+            model=manager_model,
+            programming_agent=programming_agent,
+            memory_backend=_global_memory_backend,
+            startup_config=config
+        )
+        
+        # Store in global
+        _global_manager_agent = manager_agent
+        _global_programming_agent = programming_agent
+        
+        return True, f"✅ Agents initialized successfully!\n- Programming: {_global_current_programming_model}\n- Manager: {_global_current_manager_model}"
+    except Exception as e:
+        import traceback
+        error_msg = f"❌ Error initializing agents: {str(e)}\n\n{traceback.format_exc()}"
+        return False, error_msg
 
 
 # ============================================================================
