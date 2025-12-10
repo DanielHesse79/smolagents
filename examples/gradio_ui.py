@@ -1660,7 +1660,6 @@ def main():
                         format_sqlite_status(result.sqlite),
                         "\n".join([f"- {w}" for w in result.warnings]) if result.warnings else "No warnings",
                         "\n".join([f"- {e}" for e in result.errors]) if result.errors else "No errors",
-                        gr.update(interactive=result.all_critical_services_ready),
                     )
                 
                 gr.Markdown("# 🚀 System Startup Checks")
