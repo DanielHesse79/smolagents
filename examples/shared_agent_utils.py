@@ -8,6 +8,7 @@ for health checks, service initialization, and agent creation.
 import os
 import time
 import json
+import subprocess
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 
@@ -113,6 +114,60 @@ def _retry_with_backoff(
 # Health Check Functions
 # ============================================================================
 
+def detect_gpu() -> tuple[bool, Optional[str]]:
+    """
+    Detect GPU availability using multiple methods.
+    
+    Returns:
+        tuple: (gpu_available: bool, gpu_info: str | None)
+    """
+    gpu_info = None
+    gpu_available = False
+    
+    # Method 1: Check PyTorch/CUDA
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_available = True
+            gpu_count = torch.cuda.device_count()
+            gpu_name = torch.cuda.get_device_name(0) if gpu_count > 0 else "Unknown"
+            gpu_info = f"{gpu_name} (CUDA {torch.version.cuda}, {gpu_count} device(s))"
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    
+    # Method 2: Check nvidia-smi (works even without PyTorch)
+    if not gpu_available:
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                gpu_available = True
+                gpu_lines = result.stdout.strip().split('\n')
+                gpu_names = [line.split(',')[0].strip() for line in gpu_lines]
+                driver_version = gpu_lines[0].split(',')[1].strip() if len(gpu_lines[0].split(',')) > 1 else "Unknown"
+                gpu_info = f"{', '.join(gpu_names)} (Driver: {driver_version})"
+        except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+            pass
+    
+    # Method 3: Check Ollama's GPU info via API (if available)
+    if not gpu_available:
+        try:
+            import requests
+            # Ollama might expose GPU info in some endpoints
+            # This is a fallback - Ollama usually uses GPU if available
+            pass
+        except Exception:
+            pass
+    
+    return gpu_available, gpu_info
+
+
 def check_ollama_health(
     base_url: str = "http://localhost:11434",
     max_retries: int = 3,
@@ -130,11 +185,25 @@ def check_ollama_health(
             "version": str | None,
             "models": list[str],
             "required_models": dict[str, bool],
+            "gpu_available": bool,
+            "gpu_info": str | None,
+            "recommended_num_ctx": int,
             "error": str | None
         }
     """
     if required_models is None:
         required_models = ["deepseek-r1:8b", "mistral:latest"]
+    
+    # Detect GPU
+    gpu_available, gpu_info = detect_gpu()
+    
+    # Calculate recommended context length based on GPU
+    if gpu_available:
+        # With GPU, can use larger context
+        recommended_num_ctx = 16384
+    else:
+        # CPU mode, use smaller context
+        recommended_num_ctx = 8192
     
     result = {
         "available": False,
@@ -142,6 +211,9 @@ def check_ollama_health(
         "version": None,
         "models": [],
         "required_models": {model: False for model in required_models},
+        "gpu_available": gpu_available,
+        "gpu_info": gpu_info,
+        "recommended_num_ctx": recommended_num_ctx,
         "error": None
     }
     
@@ -305,6 +377,111 @@ def check_sqlite_health(db_path: str = "./data/publications.db") -> dict:
 
 
 # ============================================================================
+# Docker/Qdrant Startup Functions
+# ============================================================================
+
+def check_docker_available() -> bool:
+    """Check if Docker is available and running."""
+    try:
+        result = subprocess.run(
+            ["docker", "version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+        return False
+
+
+def check_qdrant_container_running(container_name: str = "qdrant") -> bool:
+    """Check if Qdrant container is already running."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        return container_name in result.stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+        return False
+
+
+def start_qdrant_container(
+    container_name: str = "qdrant",
+    port: int = 6333,
+    port_grpc: int = 6334,
+    image: str = "qdrant/qdrant"
+) -> tuple[bool, str]:
+    """
+    Start Qdrant Docker container if not already running.
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    # Check if Docker is available
+    if not check_docker_available():
+        return False, "Docker is not available. Please install Docker Desktop and ensure it's running."
+    
+    # Check if container is already running
+    if check_qdrant_container_running(container_name):
+        return True, f"Qdrant container '{container_name}' is already running."
+    
+    # Check if container exists but is stopped
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"name={container_name}", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if container_name in result.stdout:
+            # Container exists but is stopped, start it
+            print(f"[STARTUP] Starting existing Qdrant container '{container_name}'...")
+            subprocess.run(
+                ["docker", "start", container_name],
+                capture_output=True,
+                timeout=30
+            )
+            # Wait a moment for container to start
+            time.sleep(2)
+            return True, f"Started existing Qdrant container '{container_name}'."
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
+        pass
+    
+    # Container doesn't exist, create and start it
+    try:
+        print(f"[STARTUP] Creating and starting Qdrant container '{container_name}'...")
+        result = subprocess.run(
+            [
+                "docker", "run", "-d",
+                "-p", f"{port}:6333",
+                "-p", f"{port_grpc}:6334",
+                "--name", container_name,
+                image
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode == 0:
+            # Wait a moment for container to start
+            time.sleep(3)
+            return True, f"Successfully started Qdrant container '{container_name}'."
+        else:
+            error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+            return False, f"Failed to start Qdrant container: {error_msg}"
+    except subprocess.TimeoutExpired:
+        return False, "Timeout while starting Qdrant container."
+    except FileNotFoundError:
+        return False, "Docker command not found. Please install Docker Desktop."
+    except Exception as e:
+        return False, f"Error starting Qdrant container: {str(e)}"
+
+
+# ============================================================================
 # Startup Checks Orchestration
 # ============================================================================
 
@@ -336,16 +513,46 @@ def run_startup_checks(config: StartupConfig) -> StartupResult:
             if missing_models:
                 warnings.append(f"Missing Ollama models: {', '.join(missing_models)}")
         
-        # Check Qdrant
+        # Try to start Qdrant if not available
         print("[STARTUP] Checking Qdrant...")
         sys.stdout.flush()
+        
+        # First check if Qdrant is already running
         qdrant_status = check_qdrant_health(
             url=config.qdrant_url,
             port=config.qdrant_port,
-            max_retries=config.max_retries,
-            retry_delay=config.retry_delay,
+            max_retries=1,  # Quick check first
+            retry_delay=1.0,
             required_collections=config.required_qdrant_collections
         )
+        
+        # If Qdrant is not available, try to start it
+        if not qdrant_status["available"]:
+            print("[STARTUP] Qdrant not available, attempting to start Qdrant container...")
+            sys.stdout.flush()
+            success, message = start_qdrant_container(
+                container_name="qdrant",
+                port=config.qdrant_port,
+                port_grpc=6334,
+                image="qdrant/qdrant"
+            )
+            
+            if success:
+                print(f"[STARTUP] {message}")
+                sys.stdout.flush()
+                # Wait a bit more for Qdrant to fully initialize
+                time.sleep(2)
+                # Re-check Qdrant health
+                qdrant_status = check_qdrant_health(
+                    url=config.qdrant_url,
+                    port=config.qdrant_port,
+                    max_retries=config.max_retries,
+                    retry_delay=config.retry_delay,
+                    required_collections=config.required_qdrant_collections
+                )
+            else:
+                print(f"[STARTUP] Could not start Qdrant: {message}")
+                sys.stdout.flush()
         
         if not qdrant_status["available"]:
             warnings.append(f"Qdrant not available: {qdrant_status.get('error', 'Unknown error')}")
