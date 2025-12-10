@@ -308,17 +308,19 @@ def check_sqlite_health(db_path: str = "./data/publications.db") -> dict:
 # ============================================================================
 
 def run_startup_checks(config: StartupConfig) -> StartupResult:
-    """
-    Run all startup checks with retry logic.
-    
-    Returns:
-        StartupResult with status of all services
-    """
-    warnings = []
-    errors = []
-    
-    # Check Ollama
-    print("Checking Ollama...")
+        """
+        Run all startup checks with retry logic.
+        
+        Returns:
+            StartupResult with status of all services
+        """
+        import sys
+        warnings = []
+        errors = []
+        
+        # Check Ollama
+        print("[STARTUP] Checking Ollama...")
+        sys.stdout.flush()
     ollama_status = check_ollama_health(
         base_url=config.ollama_base_url,
         max_retries=config.max_retries,
@@ -333,8 +335,9 @@ def run_startup_checks(config: StartupConfig) -> StartupResult:
         if missing_models:
             warnings.append(f"Missing Ollama models: {', '.join(missing_models)}")
     
-    # Check Qdrant
-    print("Checking Qdrant...")
+        # Check Qdrant
+        print("[STARTUP] Checking Qdrant...")
+        sys.stdout.flush()
     qdrant_status = check_qdrant_health(
         url=config.qdrant_url,
         port=config.qdrant_port,
@@ -350,8 +353,9 @@ def run_startup_checks(config: StartupConfig) -> StartupResult:
         if missing_collections:
             warnings.append(f"Missing Qdrant collections (will be created): {', '.join(missing_collections)}")
     
-    # Check SQLite
-    print("Checking SQLite...")
+        # Check SQLite
+        print("[STARTUP] Checking SQLite...")
+        sys.stdout.flush()
     sqlite_status = check_sqlite_health(db_path=config.sqlite_db_path)
     
     if not sqlite_status["available"]:

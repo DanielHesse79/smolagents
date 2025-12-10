@@ -1126,7 +1126,12 @@ def main():
     global _global_current_manager_model, _global_memory_backend, _global_db_path
     
     # Run startup checks
-    print("Running startup checks...")
+    print("=" * 80)
+    print("[STARTUP] Starting Gradio UI application...")
+    print("=" * 80)
+    print("[STARTUP] Running startup checks...")
+    import sys
+    sys.stdout.flush()
     config = StartupConfig()
     # #region debug log
     f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gradio_ui.py:1115","message":"Before run_startup_checks","data":{"config_type":type(config).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
@@ -1148,7 +1153,9 @@ def main():
     programming_agent = None
     
     if startup_result.all_critical_services_ready:
-        print("Initializing services...")
+        print("[STARTUP] Initializing services...")
+        import sys
+        sys.stdout.flush()
         memory_backend = initialize_memory_backend(startup_result.qdrant)
         qdrant_client = initialize_qdrant_client(startup_result.qdrant)
         db_path = initialize_sqlite_db(startup_result.sqlite)
@@ -1158,10 +1165,15 @@ def main():
         
         # Setup models
         if startup_result.ollama["available"]:
+            print("[STARTUP] Setting up Ollama models...")
+            import sys
+            sys.stdout.flush()
             # #region debug log
             f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"gradio_ui.py:1142","message":"Before setup_ollama_models","data":{"ollama_available":startup_result.ollama.get("available"),"config_type":type(config).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
             # #endregion
             programming_model, manager_model = setup_ollama_models(startup_result.ollama, config)
+            print(f"[STARTUP] Models ready: {programming_model.model_id}, {manager_model.model_id}")
+            sys.stdout.flush()
             # #region debug log
             f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"gradio_ui.py:1143","message":"After setup_ollama_models","data":{"programming_model_type":type(programming_model).__name__,"manager_model_type":type(manager_model).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
             # #endregion
@@ -1169,11 +1181,19 @@ def main():
             _global_current_programming_model = programming_model.model_id.replace("ollama_chat/", "")
             _global_current_manager_model = manager_model.model_id.replace("ollama_chat/", "")
         else:
+            print("[STARTUP] Setting up API models (fallback)...")
+            import sys
+            sys.stdout.flush()
             programming_model, manager_model = setup_api_models()
             _global_current_programming_model = "API Model"
             _global_current_manager_model = "API Model"
+            print("[STARTUP] API models ready")
+            sys.stdout.flush()
         
         # Create agents
+        print("[STARTUP] Creating programming agent...")
+        import sys
+        sys.stdout.flush()
         # #region debug log
         f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gradio_ui.py:1153","message":"Before create_programming_agent","data":{"model_type":type(programming_model).__name__,"memory_backend_type":type(memory_backend).__name__ if memory_backend else None,"db_path":db_path},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
         # #endregion
@@ -1183,23 +1203,33 @@ def main():
             db_path=db_path,
             qdrant_collection_name="microsampling_publications"
         )
+        print("[STARTUP] Programming agent created successfully")
+        sys.stdout.flush()
         # #region debug log
         f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gradio_ui.py:1160","message":"After create_programming_agent","data":{"agent_type":type(programming_agent).__name__ if programming_agent else None},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
         # #endregion
         
         # Create manager agent using Gradio-specific function
+        print("[STARTUP] Creating manager agent...")
+        import sys
+        sys.stdout.flush()
         manager_agent = create_manager_agent_gradio(
             model=manager_model,
             programming_agent=programming_agent,
             memory_backend=memory_backend,
             startup_config=config
         )
+        print("[STARTUP] Manager agent created successfully")
+        sys.stdout.flush()
         
         # Store in global
         _global_manager_agent = manager_agent
         _global_programming_agent = programming_agent
     
     # Create main interface with tabs
+    print("[STARTUP] Building Gradio interface...")
+    import sys
+    sys.stdout.flush()
     with gr.Blocks(title="Daniel's Army of Agents") as main_ui:
         gr.Markdown("# 🚀 Daniel's Army of Agents")
         
@@ -1752,8 +1782,13 @@ def main():
     else:
         port = 7860  # Fallback to default if no port found
     
+    print("=" * 80)
     print(f"[INFO] Starting Gradio server on port {port}")
+    print(f"[INFO] Access the UI at: http://localhost:{port}")
+    print("=" * 80)
     print("[DEBUG] About to call launch()...")
+    import sys
+    sys.stdout.flush()
     try:
         main_ui.launch(
             server_name="0.0.0.0",
@@ -1763,10 +1798,13 @@ def main():
             prevent_thread_lock=False,  # Ensure the server blocks
         )
         print("[DEBUG] launch() returned - this means server stopped")
+    except KeyboardInterrupt:
+        print("\n[INFO] Server stopped by user (Ctrl+C)")
     except Exception as e:
         print(f"[ERROR] launch() raised exception: {e}")
         import traceback
         traceback.print_exc()
+        sys.stdout.flush()
     
     # Keep the server running
     print("[INFO] Server should be running. Press Ctrl+C to stop.")
