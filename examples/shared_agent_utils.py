@@ -1,12 +1,13 @@
 """
 Shared utility functions for agent setup and initialization.
 
-This module provides common functions used by both streamlit_ui.py and gradio_ui.py
+This module provides common functions used by gradio_ui.py
 for health checks, service initialization, and agent creation.
 """
 
 import os
 import time
+import json
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 
@@ -572,8 +573,54 @@ def initialize_sqlite_db(sqlite_status: dict):
 # Model Setup Functions
 # ============================================================================
 
-def setup_ollama_models(ollama_status: dict, config: Optional[StartupConfig] = None):
-    """Setup Ollama models based on health check status."""
+def get_model_config_path() -> str:
+    """Get the path to the model configuration file."""
+    config_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+    os.makedirs(config_dir, exist_ok=True)
+    return os.path.join(config_dir, "model_config.json")
+
+
+def load_model_preferences() -> dict:
+    """Load saved model preferences from config file."""
+    config_path = get_model_config_path()
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[WARN] Could not load model preferences: {e}")
+    return {}
+
+
+def save_model_preferences(programming_model: str, manager_model: str):
+    """Save model preferences to config file."""
+    config_path = get_model_config_path()
+    try:
+        preferences = {
+            "programming_model": programming_model,
+            "manager_model": manager_model,
+            "last_updated": time.time()
+        }
+        with open(config_path, 'w') as f:
+            json.dump(preferences, f, indent=2)
+    except Exception as e:
+        print(f"[WARN] Could not save model preferences: {e}")
+
+
+def setup_ollama_models(
+    ollama_status: dict, 
+    config: Optional[StartupConfig] = None,
+    programming_model_name: Optional[str] = None,
+    manager_model_name: Optional[str] = None
+):
+    """Setup Ollama models based on health check status.
+    
+    Args:
+        ollama_status: Status dict from health check
+        config: Optional startup configuration
+        programming_model_name: Optional specific programming model name (if None, will auto-select)
+        manager_model_name: Optional specific manager model name (if None, will auto-select)
+    """
     base_url = ollama_status.get("url", "http://localhost:11434")
     
     # Default config values
@@ -590,50 +637,68 @@ def setup_ollama_models(ollama_status: dict, config: Optional[StartupConfig] = N
         temperature = config.ollama_temperature
         top_p = config.ollama_top_p
     
-    # Default model names
-    programming_model_name = "deepseek-r1:8b"
-    manager_model_name = "mistral:latest"
-    
-    # Try to find models from available models
+    # Get available models
     available_models = ollama_status.get("models", [])
-    required_models = ollama_status.get("required_models", {})
     
-    # Find DeepSeek model
-    for model in available_models:
-        if "deepseek" in model.lower() and "r1" in model.lower():
-            programming_model_name = model
-            break
-        elif "deepseek" in model.lower() and programming_model_name == "deepseek-r1:8b":
-            programming_model_name = model
+    # If model names not provided, try to load from preferences or auto-select
+    if not programming_model_name:
+        preferences = load_model_preferences()
+        programming_model_name = preferences.get("programming_model")
+        
+        # If no saved preference, try to find a suitable model
+        if not programming_model_name or programming_model_name not in available_models:
+            # Try to find DeepSeek model
+            for model in available_models:
+                if "deepseek" in model.lower() and "r1" in model.lower():
+                    programming_model_name = model
+                    break
+                elif "deepseek" in model.lower() and not programming_model_name:
+                    programming_model_name = model
+            
+            # If still no model found, use first available
+            if not programming_model_name and available_models:
+                programming_model_name = available_models[0]
     
-    # Find Mistral model
-    for model in available_models:
-        if "mistral" in model.lower():
-            manager_model_name = model
-            break
+    if not manager_model_name:
+        preferences = load_model_preferences()
+        manager_model_name = preferences.get("manager_model")
+        
+        # If no saved preference, try to find a suitable model
+        if not manager_model_name or manager_model_name not in available_models:
+            # Try to find Mistral model
+            for model in available_models:
+                if "mistral" in model.lower():
+                    manager_model_name = model
+                    break
+            
+            # If still no model found, use first available (but not the same as programming)
+            if not manager_model_name and available_models:
+                manager_model_name = available_models[0] if available_models[0] != programming_model_name else (available_models[1] if len(available_models) > 1 else available_models[0])
     
-    # Use required models if found
-    for model, found in required_models.items():
-        if found and "deepseek" in model.lower():
-            programming_model_name = model
-        elif found and "mistral" in model.lower():
-            manager_model_name = model
+    # Validate models exist
+    if programming_model_name not in available_models:
+        raise ValueError(f"Programming model '{programming_model_name}' not found in available models: {available_models}")
+    if manager_model_name not in available_models:
+        raise ValueError(f"Manager model '{manager_model_name}' not found in available models: {available_models}")
+    
+    # Save preferences for next time
+    save_model_preferences(programming_model_name, manager_model_name)
     
     from smolagents import LiteLLMModel
     
-        try:
-            programming_model = LiteLLMModel(
-                model_id=f"ollama_chat/{programming_model_name}",
-                api_base=base_url,
-                api_key="ollama",
-                timeout=timeout,
-                max_tokens=max_tokens,
-                num_ctx=num_ctx,
-                temperature=temperature,
-                top_p=top_p,
-            )
-        except Exception as e:
-            raise
+    try:
+        programming_model = LiteLLMModel(
+            model_id=f"ollama_chat/{programming_model_name}",
+            api_base=base_url,
+            api_key="ollama",
+            timeout=timeout,
+            max_tokens=max_tokens,
+            num_ctx=num_ctx,
+            temperature=temperature,
+            top_p=top_p,
+        )
+    except Exception as e:
+        raise
     
     try:
         manager_model = LiteLLMModel(

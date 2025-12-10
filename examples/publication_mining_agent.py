@@ -1,7 +1,7 @@
 """
 Utilities for building a domain-tuned agent that hunts for microsampling publications.
 
-The helper keeps the Streamlit entrypoint lean while encoding the role, search contract,
+The helper keeps the UI entrypoint lean while encoding the role, search contract,
 and output expectations in one place. Tests can validate the prompt and wiring without
 touching the UI.
 """

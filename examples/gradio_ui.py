@@ -1146,8 +1146,21 @@ def main():
     manager_agent = None
     programming_agent = None
     
-    if startup_result.all_critical_services_ready:
-        print("[STARTUP] Initializing services...")
+    # Check if we have saved model preferences
+    saved_preferences = load_model_preferences() if startup_result.ollama.get("available", False) else {}
+    has_saved_models = bool(saved_preferences.get("programming_model") and saved_preferences.get("manager_model"))
+    
+    # Check if saved models are still available
+    models_available = False
+    if has_saved_models and startup_result.ollama.get("available", False):
+        available_models = startup_result.ollama.get("models", [])
+        prog_model = saved_preferences.get("programming_model")
+        mgr_model = saved_preferences.get("manager_model")
+        models_available = prog_model in available_models and mgr_model in available_models
+    
+    # Initialize agents if ready and we have valid saved models
+    if startup_result.all_critical_services_ready and models_available:
+        print("[STARTUP] Initializing services with saved model preferences...")
         import sys
         sys.stdout.flush()
         memory_backend = initialize_memory_backend(startup_result.qdrant)
@@ -1157,12 +1170,17 @@ def main():
         _global_memory_backend = memory_backend
         _global_db_path = db_path
         
-        # Setup models
+        # Setup models using saved preferences
         if startup_result.ollama["available"]:
-            print("[STARTUP] Setting up Ollama models...")
+            print("[STARTUP] Setting up Ollama models from saved preferences...")
             import sys
             sys.stdout.flush()
-            programming_model, manager_model = setup_ollama_models(startup_result.ollama, config)
+            programming_model, manager_model = setup_ollama_models(
+                startup_result.ollama, 
+                config,
+                programming_model_name=saved_preferences.get("programming_model"),
+                manager_model_name=saved_preferences.get("manager_model")
+            )
             print(f"[STARTUP] Models ready: {programming_model.model_id}, {manager_model.model_id}")
             sys.stdout.flush()
             # Store current model names
@@ -1207,6 +1225,18 @@ def main():
         # Store in global
         _global_manager_agent = manager_agent
         _global_programming_agent = programming_agent
+    elif startup_result.all_critical_services_ready and startup_result.ollama.get("available", False):
+        # Services ready but no valid saved models - will need model selection
+        print("[STARTUP] Services ready but model selection required...")
+        import sys
+        sys.stdout.flush()
+        # Initialize non-model services
+        memory_backend = initialize_memory_backend(startup_result.qdrant)
+        qdrant_client = initialize_qdrant_client(startup_result.qdrant)
+        db_path = initialize_sqlite_db(startup_result.sqlite)
+        
+        _global_memory_backend = memory_backend
+        _global_db_path = db_path
     
     # Create main interface with tabs
     print("[STARTUP] Building Gradio interface...")
