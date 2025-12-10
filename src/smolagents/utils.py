@@ -38,7 +38,23 @@ if TYPE_CHECKING:
     from smolagents.memory import AgentLogger
 
 
-__all__ = ["AgentError"]
+__all__ = [
+    "AgentError",
+    "AgentExecutionError",
+    "AgentGenerationError",
+    "AgentMaxStepsError",
+    "AgentParsingError",
+    "AgentToolCallError",
+    "AgentToolExecutionError",
+    "create_agent_gradio_app_template",
+    "create_agent_streamlit_app_template",
+    "extract_code_from_text",
+    "is_valid_name",
+    "make_init_file",
+    "parse_code_blobs",
+    "truncate_content",
+    "validate_user_input",
+]
 
 
 @lru_cache
@@ -480,6 +496,95 @@ def create_agent_streamlit_app_template():
     env.filters["repr"] = repr
     env.filters["camelcase"] = lambda value: "".join(word.capitalize() for word in value.split("_"))
     return env.from_string(AGENT_STREAMLIT_APP_TEMPLATE)
+
+
+AGENT_GRADIO_APP_TEMPLATE = """import yaml
+import os
+import gradio as gr
+from smolagents import {{ class_name }}, {{ agent_dict['model']['class'] }}
+
+# Get current directory path
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+{% for tool in tools.values() -%}
+from {{managed_agent_relative_path}}tools.{{ tool.name }} import {{ tool.__class__.__name__ }} as {{ tool.name | camelcase }}
+{% endfor %}
+{% for managed_agent in managed_agents.values() -%}
+from {{managed_agent_relative_path}}managed_agents.{{ managed_agent.name }}.app import agent_{{ managed_agent.name }}
+{% endfor %}
+
+model = {{ agent_dict['model']['class'] }}(
+{% for key in agent_dict['model']['data'] if key != 'class' -%}
+    {{ key }}={{ agent_dict['model']['data'][key]|repr }},
+{% endfor %})
+
+{% for tool in tools.values() -%}
+{{ tool.name }} = {{ tool.name | camelcase }}()
+{% endfor %}
+
+with open(os.path.join(CURRENT_DIR, "prompts.yaml"), 'r') as stream:
+    prompt_templates = yaml.safe_load(stream)
+
+{{ agent_name }} = {{ class_name }}(
+    model=model,
+    tools=[{% for tool_name in tools.keys() if tool_name != "final_answer" %}{{ tool_name }}{% if not loop.last %}, {% endif %}{% endfor %}],
+    managed_agents=[{% for subagent_name in managed_agents.keys() %}agent_{{ subagent_name }}{% if not loop.last %}, {% endif %}{% endfor %}],
+    {% for attribute_name, value in agent_dict.items() if attribute_name not in ["class", "model", "tools", "prompt_templates", "authorized_imports", "managed_agents", "requirements"] -%}
+    {{ attribute_name }}={{ value|repr }},
+    {% endfor %}prompt_templates=prompt_templates
+)
+
+def chat_interface(message, history):
+    response = {{ agent_name }}(message)
+    return response.output if hasattr(response, 'output') else str(response)
+
+if __name__ == "__main__":
+    demo = gr.ChatInterface(
+        fn=chat_interface,
+        title="Agent Chat Interface",
+        description="Chat with your agent"
+    )
+    demo.launch()
+""".strip()
+
+
+def create_agent_gradio_app_template():
+    env = jinja2.Environment(loader=jinja2.BaseLoader(), undefined=jinja2.StrictUndefined)
+    env.filters["repr"] = repr
+    env.filters["camelcase"] = lambda value: "".join(word.capitalize() for word in value.split("_"))
+    return env.from_string(AGENT_GRADIO_APP_TEMPLATE)
+
+
+def validate_user_input(task: str) -> tuple[bool, str]:
+    """
+    Validate user input task string.
+    
+    Args:
+        task: The task string to validate
+        
+    Returns:
+        tuple[bool, str]: (is_valid, error_message) where is_valid is True if valid, False otherwise
+    """
+    if not isinstance(task, str):
+        return (False, "Task must be a string")
+    
+    if not task.strip():
+        return (False, "Task cannot be empty")
+    
+    # Check for potentially dangerous patterns
+    dangerous_patterns = [
+        ("__import__", "Direct import calls are not allowed"),
+        ("eval(", "Eval calls are not allowed"),
+        ("exec(", "Exec calls are not allowed"),
+        ("compile(", "Compile calls are not allowed"),
+    ]
+    
+    task_lower = task.lower()
+    for pattern, message in dangerous_patterns:
+        if pattern in task_lower:
+            return (False, f"{message}: {pattern}")
+    
+    return (True, "")
 
 
 class RateLimiter:

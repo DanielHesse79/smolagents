@@ -60,7 +60,14 @@ class SimpleTextBrowser:
         if uri_or_path == "about:blank":
             self._set_page_content("")
         elif uri_or_path.startswith("google:"):
-            self._serpapi_search(uri_or_path[len("google:") :].strip(), filter_year=filter_year)
+            # Only use SerpAPI if key is available, otherwise skip search functionality
+            if self.serpapi_key:
+                self._serpapi_search(uri_or_path[len("google:") :].strip(), filter_year=filter_year)
+            else:
+                self._set_page_content(
+                    "Search functionality requires an API key. Please use the web_search tool instead, "
+                    "or set SERPAPI_API_KEY or SERPER_API_KEY environment variable."
+                )
         else:
             if (
                 not uri_or_path.startswith("http:")
@@ -203,7 +210,12 @@ class SimpleTextBrowser:
 
     def _serpapi_search(self, query: str, filter_year: int | None = None) -> None:
         if self.serpapi_key is None:
-            raise ValueError("Missing SerpAPI key.")
+            # Return a helpful message instead of raising an error
+            self._set_page_content(
+                "Search functionality requires an API key. Please use the web_search tool instead, "
+                "or set SERPAPI_API_KEY or SERPER_API_KEY environment variable."
+            )
+            return
 
         params = {
             "engine": "google",
