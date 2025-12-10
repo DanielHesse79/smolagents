@@ -321,60 +321,60 @@ def run_startup_checks(config: StartupConfig) -> StartupResult:
         # Check Ollama
         print("[STARTUP] Checking Ollama...")
         sys.stdout.flush()
-    ollama_status = check_ollama_health(
-        base_url=config.ollama_base_url,
-        max_retries=config.max_retries,
-        retry_delay=config.retry_delay,
-        required_models=config.required_ollama_models
-    )
-    
-    if not ollama_status["available"]:
-        warnings.append(f"Ollama not available: {ollama_status.get('error', 'Unknown error')}")
-    else:
-        missing_models = [m for m, found in ollama_status["required_models"].items() if not found]
-        if missing_models:
-            warnings.append(f"Missing Ollama models: {', '.join(missing_models)}")
-    
+        ollama_status = check_ollama_health(
+            base_url=config.ollama_base_url,
+            max_retries=config.max_retries,
+            retry_delay=config.retry_delay,
+            required_models=config.required_ollama_models
+        )
+        
+        if not ollama_status["available"]:
+            warnings.append(f"Ollama not available: {ollama_status.get('error', 'Unknown error')}")
+        else:
+            missing_models = [m for m, found in ollama_status["required_models"].items() if not found]
+            if missing_models:
+                warnings.append(f"Missing Ollama models: {', '.join(missing_models)}")
+        
         # Check Qdrant
         print("[STARTUP] Checking Qdrant...")
         sys.stdout.flush()
-    qdrant_status = check_qdrant_health(
-        url=config.qdrant_url,
-        port=config.qdrant_port,
-        max_retries=config.max_retries,
-        retry_delay=config.retry_delay,
-        required_collections=config.required_qdrant_collections
-    )
-    
-    if not qdrant_status["available"]:
-        warnings.append(f"Qdrant not available: {qdrant_status.get('error', 'Unknown error')}")
-    else:
-        missing_collections = [c for c, found in qdrant_status["required_collections"].items() if not found]
-        if missing_collections:
-            warnings.append(f"Missing Qdrant collections (will be created): {', '.join(missing_collections)}")
-    
+        qdrant_status = check_qdrant_health(
+            url=config.qdrant_url,
+            port=config.qdrant_port,
+            max_retries=config.max_retries,
+            retry_delay=config.retry_delay,
+            required_collections=config.required_qdrant_collections
+        )
+        
+        if not qdrant_status["available"]:
+            warnings.append(f"Qdrant not available: {qdrant_status.get('error', 'Unknown error')}")
+        else:
+            missing_collections = [c for c, found in qdrant_status["required_collections"].items() if not found]
+            if missing_collections:
+                warnings.append(f"Missing Qdrant collections (will be created): {', '.join(missing_collections)}")
+        
         # Check SQLite
         print("[STARTUP] Checking SQLite...")
         sys.stdout.flush()
-    sqlite_status = check_sqlite_health(db_path=config.sqlite_db_path)
-    
-    if not sqlite_status["available"]:
-        errors.append(f"SQLite not available: {sqlite_status.get('error', 'Unknown error')}")
-    else:
-        missing_tables = [t for t, found in sqlite_status["required_tables"].items() if not found]
-        if missing_tables:
-            warnings.append(f"Missing SQLite tables (will be created): {', '.join(missing_tables)}")
-    
-    # Check publication tools
-    publication_tools_available = PUBLICATION_TOOLS_AVAILABLE
-    if not publication_tools_available:
-        warnings.append("Publication tools not available (some features may be limited)")
-    
-    # Determine if critical services are ready
-    # SQLite is critical, Ollama and Qdrant are optional
-    all_critical_ready = sqlite_status["available"]
-    
-    return StartupResult(
+        sqlite_status = check_sqlite_health(db_path=config.sqlite_db_path)
+        
+        if not sqlite_status["available"]:
+            errors.append(f"SQLite not available: {sqlite_status.get('error', 'Unknown error')}")
+        else:
+            missing_tables = [t for t, found in sqlite_status["required_tables"].items() if not found]
+            if missing_tables:
+                warnings.append(f"Missing SQLite tables (will be created): {', '.join(missing_tables)}")
+        
+        # Check publication tools
+        publication_tools_available = PUBLICATION_TOOLS_AVAILABLE
+        if not publication_tools_available:
+            warnings.append("Publication tools not available (some features may be limited)")
+        
+        # Determine if critical services are ready
+        # SQLite is critical, Ollama and Qdrant are optional
+        all_critical_ready = sqlite_status["available"]
+        
+        return StartupResult(
         ollama=ollama_status,
         qdrant=qdrant_status,
         sqlite=sqlite_status,
@@ -574,9 +574,6 @@ def initialize_sqlite_db(sqlite_status: dict):
 
 def setup_ollama_models(ollama_status: dict, config: Optional[StartupConfig] = None):
     """Setup Ollama models based on health check status."""
-    # #region debug log
-    import json; f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"shared_agent_utils.py:571","message":"setup_ollama_models entry","data":{"config_type":type(config).__name__ if config else None,"ollama_url":ollama_status.get("url")},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-    # #endregion
     base_url = ollama_status.get("url", "http://localhost:11434")
     
     # Default config values
@@ -624,11 +621,8 @@ def setup_ollama_models(ollama_status: dict, config: Optional[StartupConfig] = N
     
     from smolagents import LiteLLMModel
     
-    # #region debug log
-    f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"shared_agent_utils.py:620","message":"Before LiteLLMModel init (programming)","data":{"model_name":programming_model_name,"base_url":base_url},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-    # #endregion
-    try:
-        programming_model = LiteLLMModel(
+        try:
+            programming_model = LiteLLMModel(
                 model_id=f"ollama_chat/{programming_model_name}",
                 api_base=base_url,
                 api_key="ollama",
@@ -638,36 +632,21 @@ def setup_ollama_models(ollama_status: dict, config: Optional[StartupConfig] = N
                 temperature=temperature,
                 top_p=top_p,
             )
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"shared_agent_utils.py:631","message":"After LiteLLMModel init (programming)","data":{"model_type":type(programming_model).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
-    except Exception as e:
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"shared_agent_utils.py:634","message":"LiteLLMModel init exception (programming)","data":{"error_type":type(e).__name__,"error_msg":str(e)},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
-        raise
+        except Exception as e:
+            raise
     
-    # #region debug log
-    f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"shared_agent_utils.py:637","message":"Before LiteLLMModel init (manager)","data":{"model_name":manager_model_name},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-    # #endregion
     try:
         manager_model = LiteLLMModel(
-                model_id=f"ollama_chat/{manager_model_name}",
-                api_base=base_url,
-                api_key="ollama",
-                timeout=timeout,
-                max_tokens=max_tokens,
-                num_ctx=num_ctx,
-                temperature=temperature,
-                top_p=top_p,
-            )
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"shared_agent_utils.py:649","message":"After LiteLLMModel init (manager)","data":{"model_type":type(manager_model).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
+            model_id=f"ollama_chat/{manager_model_name}",
+            api_base=base_url,
+            api_key="ollama",
+            timeout=timeout,
+            max_tokens=max_tokens,
+            num_ctx=num_ctx,
+            temperature=temperature,
+            top_p=top_p,
+        )
     except Exception as e:
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"shared_agent_utils.py:652","message":"LiteLLMModel init exception (manager)","data":{"error_type":type(e).__name__,"error_msg":str(e)},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
         raise
     
     print(f"[OK] Using Ollama models: {programming_model_name} (programming), {manager_model_name} (manager)")
@@ -707,9 +686,6 @@ def create_programming_agent(
     qdrant_collection_name: str = "microsampling_publications"
 ):
     """Create the programming agent with appropriate tools."""
-    # #region debug log
-    import json; f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"shared_agent_utils.py:672","message":"create_programming_agent entry","data":{"model_type":type(model).__name__,"memory_backend_type":type(memory_backend).__name__ if memory_backend else None},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-    # #endregion
     from smolagents import CodeAgent
     
     print("Creating programming agent (DeepSeek R1 8B)...")
@@ -728,9 +704,6 @@ def create_programming_agent(
         ]
         print("[OK] Publication tools and error/researcher tools added to programming agent")
     
-    # #region debug log
-    f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"shared_agent_utils.py:727","message":"Before CodeAgent init","data":{"tools_count":len(programming_tools),"model_type":type(model).__name__,"has_memory_backend":memory_backend is not None},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-    # #endregion
     try:
         programming_agent = CodeAgent(
             tools=programming_tools,
@@ -796,13 +769,7 @@ RESEARCHER MANAGEMENT:
 If you make a syntax error, immediately fix it in the next step with correct Python syntax.
 """,
         )
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"shared_agent_utils.py:790","message":"After CodeAgent init","data":{"agent_type":type(programming_agent).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
     except Exception as e:
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"shared_agent_utils.py:793","message":"CodeAgent init exception","data":{"error_type":type(e).__name__,"error_msg":str(e)},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
         raise
     print("[OK] Programming agent created successfully")
     return programming_agent

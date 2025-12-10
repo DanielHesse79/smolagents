@@ -1118,9 +1118,6 @@ _global_document_reader = SimpleDocumentReaderTool()
 
 def main():
     """Main entry point for Gradio UI."""
-    # #region debug log
-    import json; f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gradio_ui.py:1107","message":"main() entry","data":{"step":"entry"},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-    # #endregion
     global _global_manager_agent, _global_programming_agent, _global_startup_result, _global_startup_config
     global _global_available_models, _global_vision_models, _global_current_programming_model
     global _global_current_manager_model, _global_memory_backend, _global_db_path
@@ -1133,9 +1130,6 @@ def main():
     import sys
     sys.stdout.flush()
     config = StartupConfig()
-    # #region debug log
-    f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gradio_ui.py:1115","message":"Before run_startup_checks","data":{"config_type":type(config).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-    # #endregion
     startup_result = run_startup_checks(config)
     
     # Store in global
@@ -1168,15 +1162,9 @@ def main():
             print("[STARTUP] Setting up Ollama models...")
             import sys
             sys.stdout.flush()
-            # #region debug log
-            f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"gradio_ui.py:1142","message":"Before setup_ollama_models","data":{"ollama_available":startup_result.ollama.get("available"),"config_type":type(config).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-            # #endregion
             programming_model, manager_model = setup_ollama_models(startup_result.ollama, config)
             print(f"[STARTUP] Models ready: {programming_model.model_id}, {manager_model.model_id}")
             sys.stdout.flush()
-            # #region debug log
-            f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"gradio_ui.py:1143","message":"After setup_ollama_models","data":{"programming_model_type":type(programming_model).__name__,"manager_model_type":type(manager_model).__name__},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-            # #endregion
             # Store current model names
             _global_current_programming_model = programming_model.model_id.replace("ollama_chat/", "")
             _global_current_manager_model = manager_model.model_id.replace("ollama_chat/", "")
@@ -1194,9 +1182,6 @@ def main():
         print("[STARTUP] Creating programming agent...")
         import sys
         sys.stdout.flush()
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gradio_ui.py:1153","message":"Before create_programming_agent","data":{"model_type":type(programming_model).__name__,"memory_backend_type":type(memory_backend).__name__ if memory_backend else None,"db_path":db_path},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
         programming_agent = create_programming_agent(
             model=programming_model,
             memory_backend=memory_backend,
@@ -1205,9 +1190,6 @@ def main():
         )
         print("[STARTUP] Programming agent created successfully")
         sys.stdout.flush()
-        # #region debug log
-        f=open(r'c:\Users\DanielsGPU\Documents\GitHub\smolagents\.cursor\debug.log','a',encoding='utf-8'); f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"gradio_ui.py:1160","message":"After create_programming_agent","data":{"agent_type":type(programming_agent).__name__ if programming_agent else None},"timestamp":int(__import__('time').time()*1000)})+'\n'); f.close()
-        # #endregion
         
         # Create manager agent using Gradio-specific function
         print("[STARTUP] Creating manager agent...")
