@@ -36,6 +36,22 @@ if sys.platform == "win32":
     os.environ['TERM'] = 'dumb'
     # Disable Rich's Windows terminal detection
     os.environ['FORCE_COLOR'] = '0'
+    
+    # Globally patch Rich's Windows rendering to prevent Unicode errors
+    # This must be done before any Rich Console objects are created
+    try:
+        from rich import _windows_renderer
+        original_legacy_windows_render = _windows_renderer.legacy_windows_render
+        
+        def safe_legacy_windows_render(buffer, term):
+            # Just skip Windows rendering completely - we don't need it for Gradio
+            # This prevents UnicodeEncodeError when Rich tries to write special characters
+            pass
+        
+        _windows_renderer.legacy_windows_render = safe_legacy_windows_render
+    except (ImportError, AttributeError):
+        # If we can't patch it, that's okay - we'll handle it in the logger
+        pass
 
 # Add project root and src to path for local imports during development
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -1605,9 +1621,9 @@ def main():
                                     if task_images and vision_agent:
                                         yield "🔍 **Vision Analysis (Qwen VL):**\n\n"
                                         try:
-                # Ensure vision agent uses Unicode-safe logger
-                if getattr(vision_agent, "logger", None):
-                    vision_agent.logger = create_unicode_safe_logger(getattr(vision_agent.logger, "level", 1))
+                                            # Ensure vision agent uses Unicode-safe logger
+                                            if getattr(vision_agent, "logger", None):
+                                                vision_agent.logger = create_unicode_safe_logger(getattr(vision_agent.logger, "level", 1))
 
                                             vision_result = vision_agent.run(task, images=task_images)
                                             vision_response = str(vision_result) if vision_result else "No analysis available"

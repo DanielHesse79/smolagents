@@ -998,19 +998,8 @@ def create_unicode_safe_logger(verbosity_level=1):
         
         console._write_buffer = types.MethodType(safe_write_buffer, console)
         
-        # Also patch Rich's legacy_windows_render function globally to prevent it from being called
-        try:
-            from rich import _windows_renderer
-            original_legacy_windows_render = _windows_renderer.legacy_windows_render
-            
-            def safe_legacy_windows_render(buffer, term):
-                # Just skip Windows rendering - we don't need it for Gradio
-                pass
-            
-            _windows_renderer.legacy_windows_render = safe_legacy_windows_render
-        except (ImportError, AttributeError):
-            # If we can't patch it, that's okay - the _write_buffer patch should catch it
-            pass
+        # Note: Rich's legacy_windows_render is already patched globally in gradio_ui.py
+        # This ensures it's patched before any Console objects are created
     else:
         console = Console(highlight=False)
     
