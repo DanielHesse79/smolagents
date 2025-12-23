@@ -427,6 +427,175 @@ class MarkdownFileWriterTool(Tool):
             return f"Error writing markdown file: {str(e)}"
 
 
+class PDFFileWriterTool(Tool):
+    """Tool for writing PDF files from text or markdown content."""
+    
+    name = "write_pdf_file"
+    description = (
+        "Writes content to a PDF file. "
+        "Use this tool to save structured output, summaries, research reports, or publication lists as PDF files. "
+        "The content can be plain text or markdown - it will be formatted appropriately in the PDF."
+    )
+    inputs = {
+        "filename": {
+            "type": "string",
+            "description": "Output filename (e.g., 'telimmune_research_report.pdf')"
+        },
+        "content": {
+            "type": "string",
+            "description": "Text or markdown content to write to the PDF file"
+        },
+        "title": {
+            "type": "string",
+            "description": "Optional title for the PDF document",
+            "nullable": True
+        }
+    }
+    output_type = "string"
+    
+    def __init__(self, output_dir: str = "./data"):
+        super().__init__()
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        # Try to import reportlab
+        try:
+            from reportlab.lib.pagesizes import letter, A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import inch
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+            from reportlab.lib.enums import TA_LEFT, TA_CENTER
+            import re
+            self.reportlab_available = True
+            self.letter = letter
+            self.A4 = A4
+            self.getSampleStyleSheet = getSampleStyleSheet
+            self.ParagraphStyle = ParagraphStyle
+            self.inch = inch
+            self.SimpleDocTemplate = SimpleDocTemplate
+            self.Paragraph = Paragraph
+            self.Spacer = Spacer
+            self.PageBreak = PageBreak
+            self.TA_LEFT = TA_LEFT
+            self.TA_CENTER = TA_CENTER
+            self.re = re
+        except ImportError:
+            self.reportlab_available = False
+    
+    def _markdown_to_paragraphs(self, content: str, styles):
+        """Convert markdown content to reportlab Paragraph objects."""
+        paragraphs = []
+        lines = content.split('\n')
+        current_paragraph = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                if current_paragraph:
+                    paragraphs.append(self.Paragraph(' '.join(current_paragraph), styles['Normal']))
+                    paragraphs.append(self.Spacer(1, 0.1 * self.inch))
+                    current_paragraph = []
+                continue
+            
+            # Handle headers
+            if line.startswith('# '):
+                if current_paragraph:
+                    paragraphs.append(self.Paragraph(' '.join(current_paragraph), styles['Normal']))
+                    current_paragraph = []
+                paragraphs.append(self.Paragraph(line[2:], styles['Heading1']))
+                paragraphs.append(self.Spacer(1, 0.2 * self.inch))
+            elif line.startswith('## '):
+                if current_paragraph:
+                    paragraphs.append(self.Paragraph(' '.join(current_paragraph), styles['Normal']))
+                    current_paragraph = []
+                paragraphs.append(self.Paragraph(line[3:], styles['Heading2']))
+                paragraphs.append(self.Spacer(1, 0.15 * self.inch))
+            elif line.startswith('### '):
+                if current_paragraph:
+                    paragraphs.append(self.Paragraph(' '.join(current_paragraph), styles['Normal']))
+                    current_paragraph = []
+                paragraphs.append(self.Paragraph(line[4:], styles['Heading3']))
+                paragraphs.append(self.Spacer(1, 0.1 * self.inch))
+            elif line.startswith('**') and line.endswith('**'):
+                # Bold text
+                if current_paragraph:
+                    paragraphs.append(self.Paragraph(' '.join(current_paragraph), styles['Normal']))
+                    current_paragraph = []
+                bold_text = line[2:-2]
+                paragraphs.append(self.Paragraph(f"<b>{bold_text}</b>", styles['Normal']))
+                paragraphs.append(self.Spacer(1, 0.05 * self.inch))
+            elif line.startswith('- ') or line.startswith('* '):
+                # Bullet point
+                if current_paragraph:
+                    paragraphs.append(self.Paragraph(' '.join(current_paragraph), styles['Normal']))
+                    current_paragraph = []
+                bullet_text = line[2:]
+                paragraphs.append(self.Paragraph(f"• {bullet_text}", styles['Normal']))
+                paragraphs.append(self.Spacer(1, 0.05 * self.inch))
+            else:
+                # Regular text
+                current_paragraph.append(line)
+        
+        if current_paragraph:
+            paragraphs.append(self.Paragraph(' '.join(current_paragraph), styles['Normal']))
+        
+        return paragraphs
+    
+    def forward(self, filename: str, content: str, title: Optional[str] = None) -> str:
+        """Write content to PDF file."""
+        try:
+            # Ensure filename ends with .pdf
+            if not filename.endswith(".pdf"):
+                filename += ".pdf"
+            
+            filepath = os.path.join(self.output_dir, filename)
+            
+            if self.reportlab_available:
+                # Use reportlab to create PDF
+                doc = self.SimpleDocTemplate(filepath, pagesize=self.A4)
+                styles = self.getSampleStyleSheet()
+                
+                # Custom styles
+                styles.add(self.ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Heading1'],
+                    fontSize=18,
+                    textColor='#333333',
+                    spaceAfter=30,
+                    alignment=self.TA_CENTER
+                ))
+                
+                # Build PDF content
+                story = []
+                
+                # Add title if provided
+                if title:
+                    story.append(self.Paragraph(title, styles['CustomTitle']))
+                    story.append(self.Spacer(1, 0.3 * self.inch))
+                elif filename:
+                    # Use filename as title
+                    title_text = filename.replace('.pdf', '').replace('_', ' ').title()
+                    story.append(self.Paragraph(title_text, styles['CustomTitle']))
+                    story.append(self.Spacer(1, 0.3 * self.inch))
+                
+                # Convert content to paragraphs
+                paragraphs = self._markdown_to_paragraphs(content, styles)
+                story.extend(paragraphs)
+                
+                # Build PDF
+                doc.build(story)
+                
+                return f"Successfully wrote PDF file: {filepath}"
+            else:
+                # Fallback: save as text file if reportlab is not available
+                # User should install reportlab for proper PDF generation
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return f"PDF generation requires reportlab. Content saved as text file: {filepath}. Install reportlab with: pip install reportlab"
+            
+        except Exception as e:
+            return f"Error writing PDF file: {str(e)}"
+
+
 class ErrorLoggingTool(Tool):
     """Tool for automatically logging agent errors to database."""
     

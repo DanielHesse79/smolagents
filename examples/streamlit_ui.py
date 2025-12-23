@@ -87,7 +87,9 @@ class StartupConfig:
     sqlite_db_path: str = "./data/publications.db"
     max_retries: int = 3
     retry_delay: float = 2.0
-    required_ollama_models: list[str] = field(default_factory=lambda: ["deepseek-r1:8b", "mistral:latest"])
+    required_ollama_models: list[str] = field(default_factory=lambda: (
+        [m.strip() for m in os.getenv("OLLAMA_REQUIRED_MODELS", "deepseek-r1:8b,mistral:latest").split(",")]
+    ))
     required_qdrant_collections: list[str] = field(default_factory=lambda: ["microsampling_publications", "daniel_army_memory"])
 
 
@@ -155,7 +157,9 @@ def check_ollama_health(
         }
     """
     if required_models is None:
-        required_models = ["deepseek-r1:8b", "mistral:latest"]
+        # Get from environment variable or use defaults
+        env_models = os.getenv("OLLAMA_REQUIRED_MODELS", "deepseek-r1:8b,mistral:latest")
+        required_models = [m.strip() for m in env_models.split(",")] if env_models else ["deepseek-r1:8b", "mistral:latest"]
     
     result = {
         "available": False,

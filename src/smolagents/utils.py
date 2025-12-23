@@ -78,16 +78,52 @@ BASE_BUILTIN_MODULES = [
 
 
 def escape_code_brackets(text: str) -> str:
-    """Escapes square brackets in code segments while preserving Rich styling tags."""
-
+    """Escapes square brackets in code segments while preserving Rich styling tags.
+    
+    Handles various forms of brackets including:
+    - Plain brackets: [text]
+    - Already escaped: \\[text\\]
+    - Partially escaped: \\[text] or [text\\]
+    - STRUCTURED_DATA tags in all forms
+    """
+    
+    # Step 1: Handle STRUCTURED_DATA tags in ALL forms (most problematic)
+    # This handles: [STRUCTURED_DATA], \[STRUCTURED_DATA\], \\[STRUCTURED_DATA\\], etc.
+    # Replace with a placeholder first, then restore with proper escaping
+    
+    # Pattern matches various escaped forms of STRUCTURED_DATA tags
+    # Matches: \[, \\[, [, and similar for closing bracket
+    structured_data_pattern = r'\\{0,2}\[(/?)STRUCTURED_DATA[^\]\n]*\\{0,2}\]'
+    text = re.sub(structured_data_pattern, r'«\1STRUCTURED_DATA»', text, flags=re.IGNORECASE)
+    
+    # Step 2: Handle other brackets
     def replace_bracketed_content(match):
         content = match.group(1)
-        cleaned = re.sub(
-            r"bold|red|green|blue|yellow|magenta|cyan|white|black|italic|dim|\s|#[0-9a-fA-F]{6}", "", content
-        )
-        return f"\\[{content}\\]" if cleaned.strip() else f"[{content}]"
+        
+        # Check if it's a Rich styling tag (should be preserved)
+        # Rich tags are things like [bold], [red], [/bold], [#ff0000], etc.
+        rich_tag_pattern = r'^/?(?:bold|red|green|blue|yellow|magenta|cyan|white|black|italic|dim|underline|strike|reverse|blink|link|#[0-9a-fA-F]{6}|on\s+\w+|\w+\s+on\s+\w+)$'
+        if re.match(rich_tag_pattern, content.strip(), re.IGNORECASE):
+            return f"[{content}]"  # Keep Rich tags as-is
+        
+        # Escape all other brackets
+        return f"\\[{content}\\]"
 
-    return re.sub(r"\[([^\]]*)\]", replace_bracketed_content, text)
+    # Also handle already-escaped brackets that Rich might still try to parse
+    # First normalize: convert \\[ to a placeholder
+    text = re.sub(r'\\\\?\[', '«OPEN»', text)
+    text = re.sub(r'\\\\?\]', '«CLOSE»', text)
+    
+    # Now escape remaining plain brackets (except Rich tags)
+    text = re.sub(r"\[([^\]]*)\]", replace_bracketed_content, text)
+    
+    # Step 3: Restore placeholders with properly escaped brackets
+    text = text.replace('«OPEN»', '\\[')
+    text = text.replace('«CLOSE»', '\\]')
+    text = text.replace('«STRUCTURED_DATA»', '\\[STRUCTURED_DATA\\]')
+    text = text.replace('«/STRUCTURED_DATA»', '\\[/STRUCTURED_DATA\\]')
+    
+    return text
 
 
 class AgentError(Exception):

@@ -27,6 +27,7 @@ try:
         QdrantUpsertTool,
         SQLUpsertTool,
         MarkdownFileWriterTool,
+        PDFFileWriterTool,
         ErrorLoggingTool,
         ResearcherUpsertTool,
         ResearcherPublicationLinkTool,
@@ -39,6 +40,7 @@ except ImportError:
             QdrantUpsertTool,
             SQLUpsertTool,
             MarkdownFileWriterTool,
+            PDFFileWriterTool,
             ErrorLoggingTool,
             ResearcherUpsertTool,
             ResearcherPublicationLinkTool,
@@ -55,13 +57,16 @@ except ImportError:
 @dataclass
 class StartupConfig:
     """Configuration for startup checks."""
-    ollama_base_url: str = "http://localhost:11434"
-    qdrant_url: str = "localhost"
-    qdrant_port: int = 6333
-    sqlite_db_path: str = "./data/publications.db"
+    ollama_base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+    qdrant_url: str = field(default_factory=lambda: os.getenv("QDRANT_URL", "localhost"))
+    qdrant_port: int = field(default_factory=lambda: int(os.getenv("QDRANT_PORT", "6333")))
+    sqlite_db_path: str = field(default_factory=lambda: os.getenv("SQLITE_DB_PATH", "./data/publications.db"))
     max_retries: int = 3
     retry_delay: float = 2.0
-    required_ollama_models: list[str] = field(default_factory=lambda: ["deepseek-r1:8b", "mistral:latest"])
+    required_ollama_models: list[str] = field(default_factory=lambda: (
+        [m.strip() for m in os.getenv("OLLAMA_REQUIRED_MODELS", "").split(",") if m.strip()]
+        # Empty by default - system will auto-select from available models
+    ))
     required_qdrant_collections: list[str] = field(default_factory=lambda: ["microsampling_publications", "daniel_army_memory"])
     # Additional config attributes for gradio_ui.py
     ollama_timeout: int = 120
@@ -178,21 +183,33 @@ def check_ollama_health(
     """
     Check Ollama availability with retry logic.
     
+    Args:
+        base_url: Ollama base URL
+        max_retries: Maximum number of retry attempts
+        retry_delay: Delay between retries in seconds
+        timeout: Request timeout in seconds
+        required_models: Optional list of model names to check for (if None, no specific models required)
+    
     Returns:
         dict: {
             "available": bool,
             "url": str,
             "version": str | None,
             "models": list[str],
-            "required_models": dict[str, bool],
+            "required_models": dict[str, bool],  # Only populated if required_models provided
             "gpu_available": bool,
             "gpu_info": str | None,
             "recommended_num_ctx": int,
             "error": str | None
         }
     """
+    # If required_models not provided, check environment variable (but don't require them)
     if required_models is None:
-        required_models = ["deepseek-r1:8b", "mistral:latest"]
+        env_models = os.getenv("OLLAMA_REQUIRED_MODELS", "")
+        if env_models:
+            required_models = [m.strip() for m in env_models.split(",") if m.strip()]
+        else:
+            required_models = []  # No specific models required - auto-select from available
     
     # Detect GPU
     gpu_available, gpu_info = detect_gpu()
@@ -210,7 +227,7 @@ def check_ollama_health(
         "url": base_url,
         "version": None,
         "models": [],
-        "required_models": {model: False for model in required_models},
+        "required_models": {model: False for model in required_models} if required_models else {},
         "gpu_available": gpu_available,
         "gpu_info": gpu_info,
         "recommended_num_ctx": recommended_num_ctx,
@@ -232,16 +249,17 @@ def check_ollama_health(
         models_data = response.json().get("models", [])
         result["models"] = [m.get("name", "") for m in models_data]
         
-        # Check required models
-        model_names_lower = [m.lower() for m in result["models"]]
-        for required_model in required_models:
-            # Check for exact match or partial match
-            found = False
-            for model_name in result["models"]:
-                if required_model.lower() in model_name.lower() or model_name.lower() in required_model.lower():
-                    found = True
-                    break
-            result["required_models"][required_model] = found
+        # Check required models (if any specified)
+        if required_models:
+            model_names_lower = [m.lower() for m in result["models"]]
+            for required_model in required_models:
+                # Check for exact match or partial match
+                found = False
+                for model_name in result["models"]:
+                    if required_model.lower() in model_name.lower() or model_name.lower() in required_model.lower():
+                        found = True
+                        break
+                result["required_models"][required_model] = found
         
         # Get version
         try:
@@ -509,9 +527,14 @@ def run_startup_checks(config: StartupConfig) -> StartupResult:
         if not ollama_status["available"]:
             warnings.append(f"Ollama not available: {ollama_status.get('error', 'Unknown error')}")
         else:
-            missing_models = [m for m, found in ollama_status["required_models"].items() if not found]
-            if missing_models:
-                warnings.append(f"Missing Ollama models: {', '.join(missing_models)}")
+            # Only warn about missing models if specific models were required
+            if ollama_status.get("required_models"):
+                missing_models = [m for m, found in ollama_status["required_models"].items() if not found]
+                if missing_models:
+                    warnings.append(f"Missing Ollama models: {', '.join(missing_models)}")
+            # If no models available at all, warn
+            elif not ollama_status.get("models"):
+                warnings.append("No Ollama models found. Please install at least one model using `ollama pull <model_name>`")
         
         # Try to start Qdrant if not available
         print("[STARTUP] Checking Qdrant...")
@@ -814,6 +837,140 @@ def save_model_preferences(programming_model: str, manager_model: str):
         print(f"[WARN] Could not save model preferences: {e}")
 
 
+def select_best_programming_model(available_models: list[str]) -> Optional[str]:
+    """Select the best programming model from available models.
+    
+    Priority:
+    1. Models with 'code' or 'coder' in name
+    2. DeepSeek models (especially R1)
+    3. CodeLlama models
+    4. WizardCoder models
+    5. StarCoder models
+    6. Other models with 'code' related keywords
+    7. Largest model (by parameter count in name)
+    8. First available model
+    """
+    if not available_models:
+        return None
+    
+    model_lower = [m.lower() for m in available_models]
+    
+    # Priority 1: Explicit code models
+    for i, model in enumerate(model_lower):
+        if any(keyword in model for keyword in ['code', 'coder', 'coding']):
+            return available_models[i]
+    
+    # Priority 2: DeepSeek (especially R1)
+    deepseek_r1 = None
+    deepseek_any = None
+    for i, model in enumerate(model_lower):
+        if 'deepseek' in model and 'r1' in model:
+            deepseek_r1 = available_models[i]
+        elif 'deepseek' in model and not deepseek_any:
+            deepseek_any = available_models[i]
+    
+    if deepseek_r1:
+        return deepseek_r1
+    if deepseek_any:
+        return deepseek_any
+    
+    # Priority 3: CodeLlama
+    for i, model in enumerate(model_lower):
+        if 'codellama' in model or 'code-llama' in model:
+            return available_models[i]
+    
+    # Priority 4: WizardCoder
+    for i, model in enumerate(model_lower):
+        if 'wizardcoder' in model or 'wizard-coder' in model:
+            return available_models[i]
+    
+    # Priority 5: StarCoder
+    for i, model in enumerate(model_lower):
+        if 'starcoder' in model or 'star-coder' in model:
+            return available_models[i]
+    
+    # Priority 6: Other code-related
+    for i, model in enumerate(model_lower):
+        if any(keyword in model for keyword in ['python', 'programming', 'dev']):
+            return available_models[i]
+    
+    # Priority 7: Largest model (by parameter count in name)
+    # Try to extract parameter count and pick largest
+    def extract_params(model_name: str) -> int:
+        import re
+        # Look for patterns like "7b", "13b", "34b", "70b", etc.
+        matches = re.findall(r'(\d+)[bm]', model_name.lower())
+        if matches:
+            return max(int(m) for m in matches)
+        return 0
+    
+    sorted_models = sorted(available_models, key=extract_params, reverse=True)
+    return sorted_models[0]
+
+
+def select_best_manager_model(available_models: list[str], exclude_model: Optional[str] = None) -> Optional[str]:
+    """Select the best manager/general-purpose model from available models.
+    
+    Priority:
+    1. Mistral models
+    2. Llama models (especially 3.x)
+    3. Qwen models
+    4. Other general-purpose models
+    5. Largest model (by parameter count)
+    6. First available (excluding programming model)
+    """
+    if not available_models:
+        return None
+    
+    # Filter out excluded model
+    candidates = [m for m in available_models if m != exclude_model]
+    if not candidates:
+        candidates = available_models  # Fallback if all excluded
+    
+    model_lower = [m.lower() for m in candidates]
+    
+    # Priority 1: Mistral
+    for i, model in enumerate(model_lower):
+        if 'mistral' in model:
+            return candidates[i]
+    
+    # Priority 2: Llama (especially 3.x)
+    llama3 = None
+    llama_any = None
+    for i, model in enumerate(model_lower):
+        if 'llama' in model:
+            if '3' in model or 'llama-3' in model:
+                llama3 = candidates[i]
+            elif not llama_any:
+                llama_any = candidates[i]
+    
+    if llama3:
+        return llama3
+    if llama_any:
+        return llama_any
+    
+    # Priority 3: Qwen
+    for i, model in enumerate(model_lower):
+        if 'qwen' in model:
+            return candidates[i]
+    
+    # Priority 4: Other general-purpose models
+    for i, model in enumerate(model_lower):
+        if any(keyword in model for keyword in ['chat', 'instruct', 'general']):
+            return candidates[i]
+    
+    # Priority 5: Largest model
+    def extract_params(model_name: str) -> int:
+        import re
+        matches = re.findall(r'(\d+)[bm]', model_name.lower())
+        if matches:
+            return max(int(m) for m in matches)
+        return 0
+    
+    sorted_models = sorted(candidates, key=extract_params, reverse=True)
+    return sorted_models[0]
+
+
 def setup_ollama_models(
     ollama_status: dict, 
     config: Optional[StartupConfig] = None,
@@ -821,6 +978,8 @@ def setup_ollama_models(
     manager_model_name: Optional[str] = None
 ):
     """Setup Ollama models based on health check status.
+    
+    Automatically selects the most suitable models from available models if not specified.
     
     Args:
         ollama_status: Status dict from health check
@@ -847,40 +1006,38 @@ def setup_ollama_models(
     # Get available models
     available_models = ollama_status.get("models", [])
     
-    # If model names not provided, try to load from preferences or auto-select
+    if not available_models:
+        raise ValueError("No Ollama models available. Please install at least one model.")
+    
+    # Auto-select programming model if not provided
     if not programming_model_name:
         preferences = load_model_preferences()
         programming_model_name = preferences.get("programming_model")
         
-        # If no saved preference, try to find a suitable model
-        if not programming_model_name or programming_model_name not in available_models:
-            # Try to find DeepSeek model
-            for model in available_models:
-                if "deepseek" in model.lower() and "r1" in model.lower():
-                    programming_model_name = model
-                    break
-                elif "deepseek" in model.lower() and not programming_model_name:
-                    programming_model_name = model
-            
-            # If still no model found, use first available
-            if not programming_model_name and available_models:
-                programming_model_name = available_models[0]
+        # Validate saved preference is still available
+        if programming_model_name not in available_models:
+            programming_model_name = None
+        
+        # Auto-select best programming model
+        if not programming_model_name:
+            programming_model_name = select_best_programming_model(available_models)
     
+    # Auto-select manager model if not provided
     if not manager_model_name:
         preferences = load_model_preferences()
         manager_model_name = preferences.get("manager_model")
         
-        # If no saved preference, try to find a suitable model
-        if not manager_model_name or manager_model_name not in available_models:
-            # Try to find Mistral model
-            for model in available_models:
-                if "mistral" in model.lower():
-                    manager_model_name = model
-                    break
-            
-            # If still no model found, use first available (but not the same as programming)
-            if not manager_model_name and available_models:
-                manager_model_name = available_models[0] if available_models[0] != programming_model_name else (available_models[1] if len(available_models) > 1 else available_models[0])
+        # Validate saved preference is still available
+        if manager_model_name not in available_models:
+            manager_model_name = None
+        
+        # Auto-select best manager model (different from programming)
+        if not manager_model_name:
+            manager_model_name = select_best_manager_model(available_models, exclude_model=programming_model_name)
+        
+        # Fallback: if only one model, use it for both
+        if not manager_model_name:
+            manager_model_name = programming_model_name
     
     # Validate models exist
     if programming_model_name not in available_models:
@@ -1024,11 +1181,12 @@ def create_programming_agent(
             QdrantUpsertTool(collection_name=qdrant_collection_name),
             SQLUpsertTool(db_path=db_path_final),
             MarkdownFileWriterTool(output_dir="./data"),
+            PDFFileWriterTool(output_dir="./data"),
             ErrorLoggingTool(db_path=db_path_final),
             ResearcherUpsertTool(db_path=db_path_final),
             ResearcherPublicationLinkTool(db_path=db_path_final),
         ]
-        print("[OK] Publication tools and error/researcher tools added to programming agent")
+        print("[OK] Publication tools, PDF writer, and error/researcher tools added to programming agent")
     
     try:
         # Create Unicode-safe logger for Windows compatibility

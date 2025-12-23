@@ -19,7 +19,11 @@ import sys
 import time
 import traceback
 import json
+import warnings
 from typing import Optional, Generator, Dict, Any
+
+# Suppress RuntimeWarning about tracemalloc
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*tracemalloc.*")
 
 # Fix Unicode encoding issues on Windows
 if sys.platform == "win32":
@@ -368,12 +372,16 @@ def format_ollama_status(ollama_status: dict) -> str:
         else:
             lines.append("- No models found")
         
-        lines.append("\n**Required Models:**")
-        for model, found in ollama_status["required_models"].items():
-            status = "✅" if found else "❌"
-            lines.append(f"{status} {model}")
-            if not found:
-                lines.append(f"  Install with: `ollama pull {model}`")
+        # Only show required models section if there are any required models
+        if ollama_status.get("required_models"):
+            lines.append("\n**Required Models:**")
+            for model, found in ollama_status["required_models"].items():
+                status = "✅" if found else "❌"
+                lines.append(f"{status} {model}")
+                if not found:
+                    lines.append(f"  Install with: `ollama pull {model}`")
+        else:
+            lines.append("\n💡 **Auto-selection enabled:** System will automatically choose the best models from available models.")
     else:
         lines.append("### ❌ Ollama is not available")
         if ollama_status.get("error"):
@@ -673,7 +681,7 @@ def create_model_from_name(model_name: str, base_url: str = "http://localhost:11
 # ============================================================================
 
 def get_agent_metrics(agent) -> Dict[str, Any]:
-    """Extract metrics from agent."""
+    """Extract metrics from agent and its managed agents."""
     metrics = {
         "total_steps": 0,
         "total_tokens": 0,
@@ -681,26 +689,62 @@ def get_agent_metrics(agent) -> Dict[str, Any]:
         "output_tokens": 0,
         "total_duration": 0.0,
         "steps": [],
+        "agent_breakdown": {},
     }
     
-    if hasattr(agent, "memory") and agent.memory:
-        steps = agent.memory.steps
-        metrics["total_steps"] = len(steps)
+    def collect_from_agent(agent, agent_name="main"):
+        """Collect metrics from a single agent."""
+        agent_metrics = {
+            "steps": 0,
+            "tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "duration": 0.0,
+        }
         
-        for step in steps:
-            if hasattr(step, "token_usage") and step.token_usage:
-                metrics["input_tokens"] += step.token_usage.input_tokens
-                metrics["output_tokens"] += step.token_usage.output_tokens
-                metrics["total_tokens"] += step.token_usage.total_tokens
+        if hasattr(agent, "memory") and agent.memory:
+            steps = agent.memory.steps
+            agent_metrics["steps"] = len(steps)
             
-            if hasattr(step, "timing") and step.timing:
-                duration = step.timing.duration or 0.0
-                metrics["total_duration"] += duration
-                metrics["steps"].append({
-                    "step_number": getattr(step, "step_number", 0),
-                    "duration": duration,
-                    "tokens": step.token_usage.total_tokens if hasattr(step, "token_usage") and step.token_usage else 0,
-                })
+            for step in steps:
+                if hasattr(step, "token_usage") and step.token_usage:
+                    tokens = step.token_usage.total_tokens or 0
+                    input_tokens = step.token_usage.input_tokens or 0
+                    output_tokens = step.token_usage.output_tokens or 0
+                    
+                    agent_metrics["tokens"] += tokens
+                    agent_metrics["input_tokens"] += input_tokens
+                    agent_metrics["output_tokens"] += output_tokens
+                    
+                    metrics["input_tokens"] += input_tokens
+                    metrics["output_tokens"] += output_tokens
+                    metrics["total_tokens"] += tokens
+                
+                if hasattr(step, "timing") and step.timing:
+                    duration = step.timing.duration or 0.0
+                    agent_metrics["duration"] += duration
+                    metrics["total_duration"] += duration
+                    metrics["steps"].append({
+                        "agent": agent_name,
+                        "step_number": getattr(step, "step_number", 0),
+                        "duration": duration,
+                        "tokens": step.token_usage.total_tokens if hasattr(step, "token_usage") and step.token_usage else 0,
+                    })
+        
+        metrics["agent_breakdown"][agent_name] = agent_metrics
+        metrics["total_steps"] += agent_metrics["steps"]
+    
+    # Collect from main agent
+    if agent:
+        collect_from_agent(agent, "manager")
+        
+        # Also collect from managed agents (e.g., programming agent)
+        if hasattr(agent, "managed_agents") and agent.managed_agents:
+            for i, managed_agent in enumerate(agent.managed_agents):
+                agent_name = getattr(managed_agent, "name", f"managed_{i}")
+                if not agent_name or agent_name == "managed_0":
+                    agent_name = "programming"
+                collect_from_agent(managed_agent, agent_name)
     
     return metrics
 
@@ -720,6 +764,20 @@ def format_metrics_markdown(metrics: Dict[str, Any]) -> str:
     if metrics["total_duration"] > 0:
         tokens_per_sec = metrics["total_tokens"] / metrics["total_duration"]
         lines.append(f"**Tokens/sec:** {tokens_per_sec:.1f}")
+    
+    # Show breakdown by agent if available
+    if metrics.get("agent_breakdown"):
+        lines.append("")
+        lines.append("### 📈 Per Agent Breakdown:")
+        for agent_name, agent_metrics in metrics["agent_breakdown"].items():
+            lines.append(f"")
+            lines.append(f"**{agent_name.capitalize()} Agent:**")
+            lines.append(f"  - Steps: {agent_metrics['steps']}")
+            lines.append(f"  - Tokens: {agent_metrics['tokens']:,}")
+            lines.append(f"  - Duration: {agent_metrics['duration']:.2f}s")
+            if agent_metrics['duration'] > 0:
+                agent_tps = agent_metrics['tokens'] / agent_metrics['duration']
+                lines.append(f"  - Tokens/sec: {agent_tps:.1f}")
     
     return "\n".join(lines)
 
@@ -878,7 +936,25 @@ DELEGATION:
 - Delegate ALL programming tasks (code, data processing, file operations, database queries)
 - Handle non-programming tasks yourself (web search, information gathering)
 
+RESPONSE QUALITY:
+- ALWAYS provide comprehensive, detailed answers with all relevant information
+- Include specific details, numbers, dates, names, and key facts from your research
+- Structure your final answers with clear sections when appropriate
+- Do NOT give brief summaries when you have collected detailed information
+- When you gather data from multiple sources, include information from ALL sources in your answer
+- For company/product research, provide: overview, key features/specifications, partnerships, recent developments, technical details, and applications
+
+OUTPUT FILES:
+- When users ask for information about companies, products, research topics, or publications, ALWAYS create a PDF report
+- Use write_pdf_file() to generate a comprehensive PDF report with:
+  * Title: Descriptive title based on the research topic
+  * Content: All collected information organized in clear sections
+  * Include: company/product details, specifications, partnerships, studies, technical information
+- Also create a markdown file (write_markdown_file()) for easy text access
+- Mention the file paths in your final answer so users know where to find the reports
+
 UNDERSTANDING USER INTENT:
+- When users ask about companies, products, or topics, provide comprehensive research and create PDF reports
 - When users ask about database contents (e.g., "how many publications/researchers are stored"), understand they likely want you to:
   1. FIRST search online if the database might be empty
   2. Store the results in the database
@@ -934,10 +1010,24 @@ PUBLICATION MINING:
              for aff in affiliations):
           swedish_pubs.append(pub)
   
-  final_answer(swedish_pubs)
+  # Step 4: Create comprehensive reports
+  # Format publications as markdown
+  md_content = "# Swedish Microsampling Publications\\n\\n"
+  for pub in swedish_pubs:
+      md_content += f"## {pub.get('title', 'N/A')}\\n"
+      md_content += f"**Authors:** {', '.join(pub.get('authors', []))}\\n"
+      md_content += f"**Year:** {pub.get('year', 'N/A')}\\n"
+      md_content += f"**DOI:** {pub.get('doi', 'N/A')}\\n\\n"
+  
+  # Write markdown and PDF files
+  write_markdown_file("swedish_microsampling_pubs.md", md_content)
+  write_pdf_file("swedish_microsampling_pubs.pdf", md_content, title="Swedish Microsampling Publications")
+  
+  final_answer(f"Found {len(swedish_pubs)} publications. Reports saved to: swedish_microsampling_pubs.md and swedish_microsampling_pubs.pdf")
   ```
 - WRONG: Don't iterate over pubmed_search() result directly - it's a string, not a list!
-- Delegate to programmer for: parsing JSON, filtering by affiliations, deduplication (use DOI/PMID/hash), storing (qdrant_upsert_publication, sql_upsert_publication), writing markdown, researcher tracking (upsert_researcher, link_researcher_publication)
+- Delegate to programmer for: parsing JSON, filtering by affiliations, deduplication (use DOI/PMID/hash), storing (qdrant_upsert_publication, sql_upsert_publication), writing markdown and PDF files, researcher tracking (upsert_researcher, link_researcher_publication)
+- ALWAYS create both markdown and PDF files when generating publication reports
 
 RESEARCHER TRACKING:
 - Use upsert_researcher to store researcher info
@@ -957,15 +1047,32 @@ def create_monitoring_tab():
     gr.Markdown("## 📊 Agent Performance Metrics")
     gr.Markdown("*Click Refresh to update metrics after agent runs*")
     
-    metrics_display = gr.Markdown()
+    # Initialize with a helpful message
+    initial_message = "📊 **Click 'Refresh All' to load metrics.**\n\n" + \
+                     "💡 *Run a task in the Chat tab first, then refresh to see metrics.*"
+    metrics_display = gr.Markdown(value=initial_message)
     refresh_btn = gr.Button("🔄 Refresh All", variant="primary")
     
     def refresh_metrics():
         agent = _global_manager_agent
-        if agent:
+        if not agent:
+            return "❌ **No agent available.**\n\nPlease run a task in the Chat tab first to initialize the agents."
+        
+        try:
             metrics = get_agent_metrics(agent)
+            
+            # If no steps, show helpful message
+            if metrics["total_steps"] == 0:
+                return "📊 **No metrics yet.**\n\n" + \
+                       "**Total Steps:** 0\n" + \
+                       "**Total Tokens:** 0\n" + \
+                       "**Total Duration:** 0.00s\n\n" + \
+                       "💡 *Run a task in the Chat tab, then click Refresh to see metrics.*"
+            
             return format_metrics_markdown(metrics)
-        return "No agent available. Run a task first in the Chat tab."
+        except Exception as e:
+            import traceback
+            return f"❌ **Error retrieving metrics:**\n\n```python\n{str(e)}\n\n{traceback.format_exc()}\n```"
     
     # Code extraction (for CodeAgent)
     gr.Markdown("## 💻 Generated Code")
@@ -1639,7 +1746,9 @@ def main():
                                     
                                     # Now run the main agent
                                     if agent:
-                                        yield response + "🤖 **Processing with DeepSeek (via Manager):**\n\n"
+                                        # Get the actual model name being used
+                                        model_display_name = selected_model if selected_model else _global_current_manager_model or "Manager"
+                                        yield response + f"🤖 **Processing with {model_display_name}:**\n\n"
                                         max_steps = getattr(agent, "max_steps", None)
                                         for chunk in stream_to_gradio(
                                             agent=agent,
@@ -1687,11 +1796,18 @@ def main():
                         
                         # Model selection if Ollama available (must come before use_open_deep_research)
                         if _global_startup_result and _global_startup_result.ollama["available"] and _global_startup_result.ollama["models"]:
+                            # Default to current manager model if set, otherwise first available
+                            default_model = None
+                            if _global_current_manager_model and _global_current_manager_model in _global_startup_result.ollama["models"]:
+                                default_model = _global_current_manager_model
+                            elif _global_startup_result.ollama["models"]:
+                                default_model = _global_startup_result.ollama["models"][0]
                             model_dropdown = gr.Dropdown(
                                 label="Select Ollama Model",
                                 choices=_global_startup_result.ollama["models"],
-                                value=_global_startup_result.ollama["models"][0] if _global_startup_result.ollama["models"] else None,
+                                value=default_model,
                                 interactive=True,
+                                info="Changes model for this chat session"
                             )
                             additional_inputs.append(model_dropdown)
                         else:
@@ -1819,101 +1935,6 @@ def main():
                     ],
                 )
             
-            # Model Selection Tab
-            with gr.Tab("🤖 Model Selection") as model_selection_tab:
-                gr.Markdown("## Select LLM Models")
-                gr.Markdown("Choose the models to use for the programming agent and manager agent.")
-                
-                # Check if agents are already initialized
-                agents_ready = _global_manager_agent is not None and _global_programming_agent is not None
-                
-                if startup_result.ollama.get("available", False) and _global_available_models:
-                    available_models = _global_available_models
-                    
-                    # Load saved preferences for default values
-                    saved_prefs = load_model_preferences()
-                    default_prog = saved_prefs.get("programming_model", available_models[0] if available_models else None)
-                    default_mgr = saved_prefs.get("manager_model", available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None))
-                    
-                    # Ensure defaults are in available models
-                    if default_prog not in available_models:
-                        default_prog = available_models[0] if available_models else None
-                    if default_mgr not in available_models:
-                        default_mgr = available_models[1] if len(available_models) > 1 else (available_models[0] if available_models else None)
-                    
-                    with gr.Row():
-                        programming_model_dropdown = gr.Dropdown(
-                            label="Programming Agent Model",
-                            choices=available_models,
-                            value=default_prog,
-                            info="Model used for code generation and programming tasks",
-                            interactive=not agents_ready,
-                        )
-                        
-                        manager_model_dropdown = gr.Dropdown(
-                            label="Manager Agent Model",
-                            choices=available_models,
-                            value=default_mgr,
-                            info="Model used for task planning and delegation",
-                            interactive=not agents_ready,
-                        )
-                    
-                    model_status = gr.Markdown()
-                    
-                    def initialize_with_selected_models(prog_model, mgr_model):
-                        """Initialize agents with selected models."""
-                        if not prog_model or not mgr_model:
-                            return "❌ Please select both models", gr.update(visible=True)
-                        
-                        if prog_model == mgr_model:
-                            return "⚠️ Warning: Using the same model for both agents is not recommended", gr.update(visible=True)
-                        
-                        success, message = initialize_agents_with_models(
-                            prog_model, 
-                            mgr_model, 
-                            startup_result, 
-                            config
-                        )
-                        
-                        if success:
-                            # Update global available models list
-                            global _global_available_models, _global_manager_agent, _global_programming_agent
-                            _global_available_models = available_models
-                            
-                            # Hide button when successful, status will be hidden automatically
-                            return message, gr.update(visible=False)
-                        else:
-                            return message, gr.update(visible=True)
-                    
-                    init_btn = gr.Button("🚀 Initialize Agents", variant="primary", visible=not agents_ready)
-                    init_status = gr.Markdown(visible=not agents_ready)
-                    
-                    if agents_ready:
-                        gr.Markdown(f"### ✅ Agents Already Initialized")
-                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
-                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
-                        gr.Markdown("\nTo change models, restart the application.")
-                    else:
-                        gr.Markdown("### ⚠️ Model Selection Required")
-                        gr.Markdown("Please select models and click '🚀 Initialize Agents' button above to start using the application.")
-                    
-                    init_btn.click(
-                        fn=initialize_with_selected_models,
-                        inputs=[programming_model_dropdown, manager_model_dropdown],
-                        outputs=[init_status, init_btn]
-                    )
-                    
-                elif not startup_result.ollama.get("available", False):
-                    gr.Markdown("### ❌ Ollama Not Available")
-                    gr.Markdown("Ollama is not running or not accessible. Please start Ollama to select models.")
-                    if agents_ready:
-                        gr.Markdown(f"### ✅ Using API Models")
-                        gr.Markdown(f"- **Programming Model**: {_global_current_programming_model}")
-                        gr.Markdown(f"- **Manager Model**: {_global_current_manager_model}")
-                else:
-                    gr.Markdown("### ⚠️ No Models Available")
-                    gr.Markdown("No Ollama models found. Please install models using `ollama pull <model_name>`")
-            
             # Monitoring Tab
             with gr.Tab("📊 Monitoring"):
                 create_monitoring_tab()
@@ -1963,7 +1984,7 @@ def main():
                     global _global_current_programming_model, _global_current_manager_model
                     
                     if not _global_startup_result or not _global_startup_result.ollama.get("available", False):
-                        return "❌ Ollama not available"
+                        return "❌ Ollama not available", f"**Current:** {_global_current_programming_model or 'Not set'}", f"**Current:** {_global_current_manager_model or 'Not set'}"
                     
                     try:
                         base_url = _global_startup_result.ollama.get("url", "http://localhost:11434")
@@ -1991,14 +2012,26 @@ def main():
                         _global_current_programming_model = prog_model
                         _global_current_manager_model = mgr_model
                         
-                        return f"✅ Models updated!\n- Programming: **{prog_model}**\n- Manager: **{mgr_model}**"
+                        # Save model preferences
+                        save_model_preferences(prog_model, mgr_model)
+                        
+                        return (
+                            f"✅ Models updated!\n- Programming: **{prog_model}**\n- Manager: **{mgr_model}**",
+                            f"**Current:** {prog_model}",
+                            f"**Current:** {mgr_model}"
+                        )
                     except Exception as e:
-                        return f"❌ Error applying models: {str(e)}"
+                        import traceback
+                        return (
+                            f"❌ Error applying models: {str(e)}\n\n```\n{traceback.format_exc()}\n```",
+                            f"**Current:** {_global_current_programming_model or 'Not set'}",
+                            f"**Current:** {_global_current_manager_model or 'Not set'}"
+                        )
                 
                 apply_models_btn.click(
                     fn=apply_model_changes,
                     inputs=[programming_model_dropdown, manager_model_dropdown],
-                    outputs=[model_status]
+                    outputs=[model_status, current_prog_model, current_mgr_model]
                 )
                 
                 # Refresh models button
@@ -2025,38 +2058,94 @@ def main():
             
             # Health Check Tab
             with gr.Tab("Health Check"):
-                try:
-                    from smolagents.health_check import HealthChecker
+                health_output = gr.Markdown()
+                
+                def run_health_check():
+                    """Run health check and display results."""
+                    config = StartupConfig()
+                    result = run_startup_checks(config)
                     
-                    health_output = gr.Markdown()
+                    # Format comprehensive health report
+                    report_lines = []
+                    report_lines.append("# 🏥 System Health Check Report\n")
+                    report_lines.append(f"**Overall Status:** {'✅ All systems operational' if result.all_critical_services_ready else '⚠️ Some issues detected'}\n")
                     
-                    def run_health_check():
-                        """Run health check and display results."""
-                        checker = HealthChecker()
-                        report = checker.format_report()
-                        return f"```\n{report}\n```"
+                    # Ollama Status
+                    report_lines.append("\n## 🦙 Ollama")
+                    if result.ollama["available"]:
+                        report_lines.append("✅ **Status:** Running")
+                        if result.ollama.get("version"):
+                            report_lines.append(f"**Version:** {result.ollama['version']}")
+                        report_lines.append(f"**Models Available:** {len(result.ollama['models'])}")
+                        if result.ollama.get("gpu_available"):
+                            report_lines.append(f"**GPU:** ✅ {result.ollama.get('gpu_info', 'Available')}")
+                        else:
+                            report_lines.append("**GPU:** ⚠️ Not detected")
+                    else:
+                        report_lines.append("❌ **Status:** Not available")
+                        if result.ollama.get("error"):
+                            report_lines.append(f"**Error:** {result.ollama['error']}")
                     
-                    health_btn = gr.Button("Run Health Check", variant="primary")
-                    health_btn.click(fn=run_health_check, outputs=[health_output])
+                    # Qdrant Status
+                    report_lines.append("\n## 🗄️ Qdrant")
+                    if result.qdrant["available"]:
+                        report_lines.append("✅ **Status:** Running")
+                        report_lines.append(f"**URL:** {result.qdrant.get('url', 'N/A')}:{result.qdrant.get('port', 'N/A')}")
+                        report_lines.append(f"**Collections:** {len([c for c, found in result.qdrant.get('required_collections', {}).items() if found])} available")
+                    else:
+                        report_lines.append("❌ **Status:** Not available")
+                        if result.qdrant.get("error"):
+                            report_lines.append(f"**Error:** {result.qdrant['error']}")
                     
-                    # Run on load
-                    main_ui.load(fn=run_health_check, outputs=[health_output])
-                except ImportError:
-                    gr.Markdown("Health check system not available.")
+                    # SQLite Status
+                    report_lines.append("\n## 💾 SQLite")
+                    if result.sqlite["available"]:
+                        report_lines.append("✅ **Status:** Running")
+                        report_lines.append(f"**Database:** {result.sqlite.get('db_path', 'N/A')}")
+                        report_lines.append(f"**Tables:** {len([t for t, found in result.sqlite.get('required_tables', {}).items() if found])} available")
+                    else:
+                        report_lines.append("❌ **Status:** Not available")
+                        if result.sqlite.get("error"):
+                            report_lines.append(f"**Error:** {result.sqlite['error']}")
+                    
+                    # Warnings and Errors
+                    if result.warnings:
+                        report_lines.append("\n## ⚠️ Warnings")
+                        for warning in result.warnings:
+                            report_lines.append(f"- {warning}")
+                    
+                    if result.errors:
+                        report_lines.append("\n## ❌ Errors")
+                        for error in result.errors:
+                            report_lines.append(f"- {error}")
+                    
+                    if not result.warnings and not result.errors:
+                        report_lines.append("\n## ✅ No Issues")
+                        report_lines.append("All systems are operating normally.")
+                    
+                    return "\n".join(report_lines)
+                
+                health_btn = gr.Button("🔄 Run Health Check", variant="primary")
+                health_btn.click(fn=run_health_check, outputs=[health_output])
+                
+                # Run on load
+                main_ui.load(fn=run_health_check, outputs=[health_output])
     
     # Launch with theme
-    # Try to find an available port if 7860 is busy
+    # Use environment variable for port if set, otherwise try to find an available port
     import socket
-    port = 7860
-    for attempt in range(10):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        result = sock.connect_ex(('127.0.0.1', port))
-        sock.close()
-        if result != 0:  # Port is available
-            break
-        port += 1
-    else:
-        port = 7860  # Fallback to default if no port found
+    port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+    # Only try to find available port if not explicitly set via environment variable
+    if "GRADIO_SERVER_PORT" not in os.environ:
+        for attempt in range(10):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('127.0.0.1', port))
+            sock.close()
+            if result != 0:  # Port is available
+                break
+            port += 1
+        else:
+            port = 7860  # Fallback to default if no port found
     
     print("=" * 80)
     print(f"[INFO] Starting Gradio server on port {port}")
