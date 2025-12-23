@@ -31,6 +31,8 @@ try:
         ErrorLoggingTool,
         ResearcherUpsertTool,
         ResearcherPublicationLinkTool,
+        AtomicFactStorageTool,
+        RelationshipGraphTool,
     )
     PUBLICATION_TOOLS_AVAILABLE = True
 except ImportError:
@@ -44,6 +46,8 @@ except ImportError:
             ErrorLoggingTool,
             ResearcherUpsertTool,
             ResearcherPublicationLinkTool,
+            AtomicFactStorageTool,
+            RelationshipGraphTool,
         )
         PUBLICATION_TOOLS_AVAILABLE = True
     except ImportError:
@@ -790,6 +794,54 @@ def initialize_sqlite_db(sqlite_status: dict):
             )
         """)
         
+        # 6. Atomic facts table (OSINT evidence tracking)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS atomic_facts (
+                fact_id TEXT PRIMARY KEY,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT,
+                qualifiers TEXT,
+                evidence_url TEXT NOT NULL,
+                evidence_snippet TEXT NOT NULL,
+                page_locator TEXT,
+                published_date TEXT,
+                retrieved_at TEXT NOT NULL,
+                confidence TEXT,
+                target_company TEXT,
+                mode TEXT
+            )
+        """)
+        
+        # 7. Relationship edges table (OSINT relationship graph)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS relationship_edges (
+                edge_id TEXT PRIMARY KEY,
+                from_entity TEXT NOT NULL,
+                to_entity TEXT NOT NULL,
+                edge_type TEXT NOT NULL,
+                strength TEXT,
+                evidence_urls TEXT,
+                evidence_snippets TEXT,
+                target_company TEXT,
+                mode TEXT,
+                retrieved_at TEXT NOT NULL
+            )
+        """)
+        
+        # 8. Evidence sources table (deduplication)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS evidence_sources (
+                source_url TEXT PRIMARY KEY,
+                source_type TEXT,
+                published_date TEXT,
+                first_retrieved_at TEXT,
+                last_retrieved_at TEXT,
+                title TEXT,
+                domain TEXT
+            )
+        """)
+        
         conn.commit()
         conn.close()
         print(f"[OK] SQLite database initialized with all tables: {db_path}")
@@ -1185,8 +1237,10 @@ def create_programming_agent(
             ErrorLoggingTool(db_path=db_path_final),
             ResearcherUpsertTool(db_path=db_path_final),
             ResearcherPublicationLinkTool(db_path=db_path_final),
+            AtomicFactStorageTool(db_path=db_path_final),
+            RelationshipGraphTool(db_path=db_path_final),
         ]
-        print("[OK] Publication tools, PDF writer, and error/researcher tools added to programming agent")
+        print("[OK] Publication tools, PDF writer, OSINT evidence tools, and error/researcher tools added to programming agent")
     
     try:
         # Create Unicode-safe logger for Windows compatibility

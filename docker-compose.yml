@@ -1,0 +1,49 @@
+services:
+  app:
+    build: .
+    ports:
+      - "7862:7860"
+    volumes:
+      - app_data:/app/data
+      - app_models:/app/models
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - QDRANT_URL=qdrant
+      - QDRANT_PORT=6333
+      - SQLITE_DB_PATH=/app/data/publications.db
+      - PYTHONUNBUFFERED=1
+      - PYTHONIOENCODING=utf-8
+    # GPU acceleration enabled - allows app to detect GPU for status display
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - qdrant
+    networks:
+      - smolagents-network
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6335:6333"
+      - "6336:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - smolagents-network
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  app_data:
+  app_models:
+
+networks:
+  smolagents-network:
+    driver: bridge
+

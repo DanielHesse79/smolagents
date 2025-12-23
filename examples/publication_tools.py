@@ -1697,3 +1697,602 @@ class ResearcherRegisterTool(Tool):
         """Generate JSON format register."""
         return json.dumps(register_data, indent=2, ensure_ascii=False)
 
+
+class AtomicFactStorageTool(Tool):
+    """Tool for storing atomic facts with evidence in OSINT research."""
+    
+    name = "store_atomic_fact"
+    description = (
+        "Stores an atomic fact extracted from OSINT research with its evidence source. "
+        "Each fact must have a subject, predicate, object, and at least one evidence source with URL and snippet."
+    )
+    inputs = {
+        "subject": {
+            "type": "string",
+            "description": "The entity or subject of the fact (e.g., company name, person name)"
+        },
+        "predicate": {
+            "type": "string",
+            "description": "The relationship or attribute (e.g., 'founded_in', 'has_partnership_with', 'sells_to')"
+        },
+        "object": {
+            "type": "string",
+            "description": "The value or target entity (e.g., '2020', 'Company XYZ', 'Pharmaceutical industry')",
+            "nullable": True
+        },
+        "evidence_url": {
+            "type": "string",
+            "description": "URL of the source that supports this fact"
+        },
+        "evidence_snippet": {
+            "type": "string",
+            "description": "10-30 word excerpt from the source that supports this fact"
+        },
+        "qualifiers": {
+            "type": "string",
+            "description": "JSON string with additional qualifiers (date, region, product line, certainty notes)",
+            "nullable": True
+        },
+        "page_locator": {
+            "type": "string",
+            "description": "Specific page/section where fact was found (e.g., 'About page', 'Press release section')",
+            "nullable": True
+        },
+        "published_date": {
+            "type": "string",
+            "description": "Publication date of the source (YYYY-MM-DD format, or 'unknown')",
+            "nullable": True
+        },
+        "confidence": {
+            "type": "string",
+            "description": "Confidence level: 'high', 'medium', or 'low'",
+            "nullable": True
+        },
+        "target_company": {
+            "type": "string",
+            "description": "The target company being researched",
+            "nullable": True
+        },
+        "mode": {
+            "type": "string",
+            "description": "Research mode: 'COMPETITOR' or 'PARTNER'",
+            "nullable": True
+        }
+    }
+    output_type = "string"
+    
+    def __init__(self, db_path: str = "./data/publications.db"):
+        super().__init__()
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+    
+    def forward(
+        self,
+        subject: str,
+        predicate: str,
+        object: Optional[str],
+        evidence_url: str,
+        evidence_snippet: str,
+        qualifiers: Optional[str] = None,
+        page_locator: Optional[str] = None,
+        published_date: Optional[str] = None,
+        confidence: Optional[str] = None,
+        target_company: Optional[str] = None,
+        mode: Optional[str] = None
+    ) -> str:
+        """Store an atomic fact with evidence."""
+        try:
+            import sqlite3
+            import hashlib
+            from datetime import datetime
+            
+            # Generate fact_id from content hash
+            fact_content = f"{subject}|{predicate}|{object or ''}|{evidence_url}"
+            fact_id = hashlib.md5(fact_content.encode()).hexdigest()
+            
+            retrieved_at = datetime.now().isoformat()
+            confidence = confidence or "medium"
+            
+            # Store in SQLite
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Ensure table exists (will be created by initialize_sqlite_db, but handle if not)
+            try:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO atomic_facts (
+                        fact_id, subject, predicate, object, qualifiers,
+                        evidence_url, evidence_snippet, page_locator,
+                        published_date, retrieved_at, confidence,
+                        target_company, mode
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    fact_id, subject, predicate, object, qualifiers,
+                    evidence_url, evidence_snippet, page_locator,
+                    published_date, retrieved_at, confidence,
+                    target_company, mode
+                ))
+            except sqlite3.OperationalError:
+                # Table doesn't exist yet, will be created by initialize_sqlite_db
+                conn.close()
+                return f"Error: atomic_facts table not found. Please ensure database is initialized."
+            
+            conn.commit()
+            conn.close()
+            
+            # Also save to JSON file for backup
+            json_file = os.path.join(os.path.dirname(self.db_path) or ".", "atomic_facts.json")
+            facts = []
+            if os.path.exists(json_file):
+                try:
+                    with open(json_file, "r", encoding="utf-8") as f:
+                        facts = json.load(f)
+                except:
+                    facts = []
+            
+            # Check if fact already exists
+            existing = [f for f in facts if f.get("fact_id") == fact_id]
+            if not existing:
+                fact_data = {
+                    "fact_id": fact_id,
+                    "subject": subject,
+                    "predicate": predicate,
+                    "object": object,
+                    "qualifiers": json.loads(qualifiers) if qualifiers else None,
+                    "evidence_url": evidence_url,
+                    "evidence_snippet": evidence_snippet,
+                    "page_locator": page_locator,
+                    "published_date": published_date,
+                    "retrieved_at": retrieved_at,
+                    "confidence": confidence,
+                    "target_company": target_company,
+                    "mode": mode
+                }
+                facts.append(fact_data)
+                
+                with open(json_file, "w", encoding="utf-8") as f:
+                    json.dump(facts, f, indent=2, ensure_ascii=False)
+            
+            # Track evidence source
+            self._track_evidence_source(evidence_url, published_date)
+            
+            return f"Stored atomic fact: {subject} {predicate} {object or '(no object)'} [ID: {fact_id[:8]}...]"
+            
+        except Exception as e:
+            return f"Error storing atomic fact: {str(e)}"
+    
+    def _track_evidence_source(self, url: str, published_date: Optional[str] = None):
+        """Track evidence source for deduplication."""
+        try:
+            import sqlite3
+            from datetime import datetime
+            from urllib.parse import urlparse
+            
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            retrieved_at = datetime.now().isoformat()
+            domain = urlparse(url).netloc
+            
+            try:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO evidence_sources (
+                        source_url, published_date, first_retrieved_at,
+                        last_retrieved_at, domain
+                    ) VALUES (?, ?, 
+                        COALESCE((SELECT first_retrieved_at FROM evidence_sources WHERE source_url = ?), ?),
+                        ?, ?
+                    )
+                """, (url, published_date, url, retrieved_at, retrieved_at, domain))
+            except sqlite3.OperationalError:
+                pass  # Table might not exist yet
+            
+            conn.commit()
+            conn.close()
+        except:
+            pass  # Fail silently for source tracking
+
+
+class RelationshipGraphTool(Tool):
+    """Tool for storing relationship edges in the OSINT relationship graph."""
+    
+    name = "store_relationship_edge"
+    description = (
+        "Stores a relationship edge between two entities in the OSINT relationship graph. "
+        "Supports relationships like customer_of, partner_of, competitor_of, distributor_of, etc."
+    )
+    inputs = {
+        "from_entity": {
+            "type": "string",
+            "description": "Source entity name"
+        },
+        "to_entity": {
+            "type": "string",
+            "description": "Target entity name"
+        },
+        "edge_type": {
+            "type": "string",
+            "description": "Type of relationship: customer_of, partner_of, competitor_of, distributor_of, supplier_of, member_of, collaborated_with"
+        },
+        "strength": {
+            "type": "string",
+            "description": "Relationship strength: 'weak', 'medium', or 'strong'",
+            "nullable": True
+        },
+        "evidence_urls": {
+            "type": "string",
+            "description": "JSON array of source URLs supporting this relationship",
+            "nullable": True
+        },
+        "evidence_snippets": {
+            "type": "string",
+            "description": "JSON array of evidence snippets (one per URL)",
+            "nullable": True
+        },
+        "target_company": {
+            "type": "string",
+            "description": "The target company being researched",
+            "nullable": True
+        },
+        "mode": {
+            "type": "string",
+            "description": "Research mode: 'COMPETITOR' or 'PARTNER'",
+            "nullable": True
+        }
+    }
+    output_type = "string"
+    
+    def __init__(self, db_path: str = "./data/publications.db"):
+        super().__init__()
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+    
+    def forward(
+        self,
+        from_entity: str,
+        to_entity: str,
+        edge_type: str,
+        strength: Optional[str] = None,
+        evidence_urls: Optional[str] = None,
+        evidence_snippets: Optional[str] = None,
+        target_company: Optional[str] = None,
+        mode: Optional[str] = None
+    ) -> str:
+        """Store a relationship edge."""
+        try:
+            import sqlite3
+            import hashlib
+            from datetime import datetime
+            
+            # Generate edge_id from content hash
+            edge_content = f"{from_entity}|{to_entity}|{edge_type}"
+            edge_id = hashlib.md5(edge_content.encode()).hexdigest()
+            
+            retrieved_at = datetime.now().isoformat()
+            strength = strength or "medium"
+            
+            # Parse JSON arrays if provided
+            if evidence_urls:
+                try:
+                    evidence_urls_list = json.loads(evidence_urls)
+                except:
+                    evidence_urls_list = [evidence_urls]
+            else:
+                evidence_urls_list = []
+            
+            if evidence_snippets:
+                try:
+                    evidence_snippets_list = json.loads(evidence_snippets)
+                except:
+                    evidence_snippets_list = [evidence_snippets]
+            else:
+                evidence_snippets_list = []
+            
+            # Store in SQLite
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            try:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO relationship_edges (
+                        edge_id, from_entity, to_entity, edge_type, strength,
+                        evidence_urls, evidence_snippets, target_company, mode, retrieved_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    edge_id, from_entity, to_entity, edge_type, strength,
+                    json.dumps(evidence_urls_list), json.dumps(evidence_snippets_list),
+                    target_company, mode, retrieved_at
+                ))
+            except sqlite3.OperationalError:
+                conn.close()
+                return f"Error: relationship_edges table not found. Please ensure database is initialized."
+            
+            conn.commit()
+            conn.close()
+            
+            # Also save to JSON file
+            json_file = os.path.join(os.path.dirname(self.db_path) or ".", "relationship_edges.json")
+            edges = []
+            if os.path.exists(json_file):
+                try:
+                    with open(json_file, "r", encoding="utf-8") as f:
+                        edges = json.load(f)
+                except:
+                    edges = []
+            
+            # Check if edge already exists
+            existing = [e for e in edges if e.get("edge_id") == edge_id]
+            if not existing:
+                edge_data = {
+                    "edge_id": edge_id,
+                    "from_entity": from_entity,
+                    "to_entity": to_entity,
+                    "edge_type": edge_type,
+                    "strength": strength,
+                    "evidence_urls": evidence_urls_list,
+                    "evidence_snippets": evidence_snippets_list,
+                    "target_company": target_company,
+                    "mode": mode,
+                    "retrieved_at": retrieved_at
+                }
+                edges.append(edge_data)
+                
+                with open(json_file, "w", encoding="utf-8") as f:
+                    json.dump(edges, f, indent=2, ensure_ascii=False)
+            
+            return f"Stored relationship: {from_entity} --[{edge_type}]--> {to_entity} [strength: {strength}, ID: {edge_id[:8]}...]"
+            
+        except Exception as e:
+            return f"Error storing relationship edge: {str(e)}"
+
+
+# Helper functions for report generation
+def generate_evidence_table_markdown(facts: list) -> str:
+    """Generate markdown table with evidence data."""
+    if not facts:
+        return "No evidence facts available."
+    
+    lines = ["| Claim | Confidence | Source URL | Snippet | Published Date |"]
+    lines.append("|-------|------------|------------|---------|----------------|")
+    
+    for fact in facts:
+        claim = f"{fact.get('subject', '')} {fact.get('predicate', '')} {fact.get('object', '')}"
+        confidence = fact.get('confidence', 'medium')
+        url = fact.get('evidence_url', '')
+        snippet = fact.get('evidence_snippet', '')[:100] + "..." if len(fact.get('evidence_snippet', '')) > 100 else fact.get('evidence_snippet', '')
+        pub_date = fact.get('published_date', 'unknown')
+        
+        lines.append(f"| {claim} | {confidence} | [{url}]({url}) | {snippet} | {pub_date} |")
+    
+    return "\n".join(lines)
+
+
+def generate_relationship_edges_table(edges: list) -> str:
+    """Generate markdown table with relationship edges."""
+    if not edges:
+        return "No relationship edges available."
+    
+    lines = ["| From | To | Edge Type | Strength | Source URL |"]
+    lines.append("|------|----|-----------|----------|------------|")
+    
+    for edge in edges:
+        from_entity = edge.get('from_entity', '')
+        to_entity = edge.get('to_entity', '')
+        edge_type = edge.get('edge_type', '')
+        strength = edge.get('strength', 'medium')
+        
+        # Get first evidence URL if available
+        evidence_urls = edge.get('evidence_urls', [])
+        if isinstance(evidence_urls, str):
+            try:
+                evidence_urls = json.loads(evidence_urls)
+            except:
+                evidence_urls = [evidence_urls]
+        
+        source_url = evidence_urls[0] if evidence_urls else "N/A"
+        
+        lines.append(f"| {from_entity} | {to_entity} | {edge_type} | {strength} | [{source_url}]({source_url}) |")
+    
+    return "\n".join(lines)
+
+
+def generate_osint_report_dossier(
+    target_company: str,
+    mode: str,
+    facts: list,
+    edges: list,
+    score: Optional[Dict[str, Any]] = None
+) -> str:
+    """Generate full OSINT report dossier in markdown format."""
+    from datetime import datetime
+    
+    report_lines = [
+        f"# {target_company} - Deep OSINT Research Report",
+        "",
+        f"**Research Mode:** {mode}",
+        f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "---",
+        "",
+        "## Executive Summary",
+        ""
+    ]
+    
+    # Add executive summary bullets (top 10-15 facts)
+    top_facts = sorted(facts, key=lambda x: {'high': 3, 'medium': 2, 'low': 1}.get(x.get('confidence', 'medium'), 1), reverse=True)[:15]
+    for fact in top_facts:
+        claim = f"{fact.get('subject', '')} {fact.get('predicate', '')} {fact.get('object', '')}"
+        url = fact.get('evidence_url', '')
+        report_lines.append(f"- {claim} [Source]({url})")
+    
+    report_lines.extend([
+        "",
+        "---",
+        "",
+        "## Company Snapshot",
+        "",
+        "### What They Do",
+        "*To be populated from facts*",
+        "",
+        "### Who They Sell To",
+        "*To be populated from facts*",
+        "",
+        "### Geographies",
+        "*To be populated from facts*",
+        "",
+        "### Key Offerings",
+        "*To be populated from facts*",
+        "",
+        "---",
+        "",
+        "## Proof & Traction",
+        "",
+        "### Customers/Partners/Distributors",
+        "*To be populated from relationship edges*",
+        "",
+        "### Evidence Table",
+        "",
+    ])
+    
+    # Add evidence table
+    report_lines.append(generate_evidence_table_markdown(facts))
+    
+    report_lines.extend([
+        "",
+        "---",
+        "",
+        "## Competitive Landscape",
+        "",
+        "*To be populated from competitor relationships*",
+        "",
+        "---",
+        "",
+        "## Relationship Map",
+        "",
+        "### Relationship Edges Table",
+        "",
+    ])
+    
+    # Add relationship edges table
+    report_lines.append(generate_relationship_edges_table(edges))
+    
+    report_lines.extend([
+        "",
+        "### Ecosystem Narrative",
+        "*2-paragraph summary of the relationship network*",
+        "",
+        "---",
+        "",
+        "## Risks & Watchouts",
+        "",
+        "*Conflicts, compliance red flags, dependency risks, outdated sources*",
+        "",
+        "---",
+        "",
+        "## Scoring",
+        ""
+    ])
+    
+    if score:
+        report_lines.extend([
+            f"- **Evidence Strength:** {score.get('evidence_strength', 0)}/25",
+            f"- **Market Traction:** {score.get('market_traction', 0)}/25",
+            f"- **Strategic Relevance:** {score.get('strategic_relevance', 0)}/25",
+            f"- **Execution Signals:** {score.get('execution_signals', 0)}/25",
+            f"- **Total Score:** {score.get('total', 0)}/100",
+            "",
+            f"**Rationale:** {score.get('rationale', 'N/A')}",
+            ""
+        ])
+    else:
+        report_lines.append("*Scoring not available*")
+    
+    report_lines.extend([
+        "---",
+        "",
+        "## Appendix",
+        "",
+        "### Source List",
+        ""
+    ])
+    
+    # Deduplicate sources
+    sources = {}
+    for fact in facts:
+        url = fact.get('evidence_url', '')
+        if url and url not in sources:
+            sources[url] = {
+                'published_date': fact.get('published_date', 'unknown'),
+                'retrieved_at': fact.get('retrieved_at', 'unknown')
+            }
+    
+    for url, info in sources.items():
+        report_lines.append(f"- [{url}]({url}) (Published: {info['published_date']}, Retrieved: {info['retrieved_at']})")
+    
+    return "\n".join(report_lines)
+
+
+def calculate_osint_score(facts: list, edges: list, mode: str) -> Dict[str, Any]:
+    """Calculate OSINT score based on evidence, traction, relevance, and execution signals."""
+    # Evidence Strength (0-25)
+    evidence_strength = 0
+    high_confidence_facts = [f for f in facts if f.get('confidence') == 'high']
+    medium_confidence_facts = [f for f in facts if f.get('confidence') == 'medium']
+    unique_sources = len(set(f.get('evidence_url', '') for f in facts))
+    
+    evidence_strength = min(25, 
+        len(high_confidence_facts) * 2 + 
+        len(medium_confidence_facts) * 1 + 
+        min(10, unique_sources)
+    )
+    
+    # Market Traction (0-25)
+    market_traction = 0
+    customer_edges = [e for e in edges if e.get('edge_type') in ['customer_of', 'sells_to']]
+    partner_edges = [e for e in edges if e.get('edge_type') in ['partner_of', 'distributor_of']]
+    strong_edges = [e for e in edges if e.get('strength') == 'strong']
+    
+    market_traction = min(25,
+        len(customer_edges) * 3 +
+        len(partner_edges) * 2 +
+        len(strong_edges) * 1
+    )
+    
+    # Strategic Relevance (0-25) - mode-specific
+    strategic_relevance = 0
+    if mode == "COMPETITOR":
+        competitor_edges = [e for e in edges if e.get('edge_type') == 'competitor_of']
+        strategic_relevance = min(25, len(competitor_edges) * 2 + len(customer_edges) * 1)
+    else:  # PARTNER
+        partner_edges_count = len(partner_edges)
+        complementary_edges = [e for e in edges if e.get('edge_type') in ['supplier_of', 'collaborated_with']]
+        strategic_relevance = min(25, partner_edges_count * 3 + len(complementary_edges) * 2)
+    
+    # Execution Signals (0-25)
+    execution_signals = 0
+    hiring_facts = [f for f in facts if 'hiring' in f.get('predicate', '').lower() or 'job' in f.get('predicate', '').lower()]
+    expansion_facts = [f for f in facts if 'expansion' in f.get('predicate', '').lower() or 'geography' in f.get('predicate', '').lower()]
+    compliance_facts = [f for f in facts if 'certification' in f.get('predicate', '').lower() or 'compliance' in f.get('predicate', '').lower()]
+    
+    execution_signals = min(25,
+        len(hiring_facts) * 2 +
+        len(expansion_facts) * 3 +
+        len(compliance_facts) * 2
+    )
+    
+    total = evidence_strength + market_traction + strategic_relevance + execution_signals
+    
+    rationale = f"Evidence: {len(facts)} facts from {unique_sources} sources. "
+    rationale += f"Traction: {len(customer_edges)} customers, {len(partner_edges)} partners. "
+    rationale += f"Mode: {mode} - {len([e for e in edges if e.get('edge_type') == 'competitor_of'])} competitors identified. "
+    rationale += f"Execution: {len(hiring_facts)} hiring signals, {len(expansion_facts)} expansion signals."
+    
+    return {
+        "evidence_strength": evidence_strength,
+        "market_traction": market_traction,
+        "strategic_relevance": strategic_relevance,
+        "execution_signals": execution_signals,
+        "total": total,
+        "rationale": rationale
+    }
+
