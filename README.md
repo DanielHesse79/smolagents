@@ -1,63 +1,45 @@
 <!---
-Copyright 2024 The HuggingFace Team. All rights reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+IntelCore: An intelligent agent framework for OSINT research and commercial intelligence.
 -->
 <p align="center">
     <!-- Uncomment when CircleCI is set up
     <a href="https://circleci.com/gh/huggingface/accelerate"><img alt="Build" src="https://img.shields.io/circleci/build/github/huggingface/transformers/master"></a>
     -->
-    <a href="https://github.com/huggingface/smolagents/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/huggingface/smolagents.svg?color=blue"></a>
-    <a href="https://huggingface.co/docs/smolagents"><img alt="Documentation" src="https://img.shields.io/website/http/huggingface.co/docs/smolagents/index.html.svg?down_color=red&down_message=offline&up_message=online"></a>
-    <a href="https://github.com/huggingface/smolagents/releases"><img alt="GitHub release" src="https://img.shields.io/github/release/huggingface/smolagents.svg"></a>
-    <a href="https://github.com/huggingface/smolagents/blob/main/CODE_OF_CONDUCT.md"><img alt="Contributor Covenant" src="https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg"></a>
+    <a href="https://github.com/yourusername/intelcore/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/yourusername/intelcore.svg?color=blue"></a>
+    <a href="https://github.com/yourusername/intelcore/releases"><img alt="GitHub release" src="https://img.shields.io/github/release/yourusername/intelcore.svg"></a>
 </p>
 
 <h3 align="center">
   <div style="display:flex;flex-direction:row;">
-    <img src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/smolagents/smolagents.png" alt="Hugging Face mascot as James Bond" width=400px>
-    <p>Agents that think in code!</p>
+    <p>IntelCore: Intelligent Agents for OSINT Research</p>
   </div>
 </h3>
 
-`smolagents` is a library that enables you to run powerful agents in a few lines of code. It offers:
+`intelcore` is a library that enables you to run powerful agents for OSINT research and commercial intelligence in a few lines of code. It offers:
 
-✨ **Simplicity**: the logic for agents fits in ~1,000 lines of code (see [agents.py](https://github.com/huggingface/smolagents/blob/main/src/smolagents/agents.py)). We kept abstractions to their minimal shape above raw code!
+✨ **Simplicity**: the logic for agents fits in ~1,000 lines of code (see [agents.py](https://github.com/yourusername/intelcore/blob/main/src/intelcore/agents.py)). We kept abstractions to their minimal shape above raw code!
 
-🧑‍💻 **First-class support for Code Agents**. Our [`CodeAgent`](https://huggingface.co/docs/smolagents/reference/agents#smolagents.CodeAgent) writes its actions in code (as opposed to "agents being used to write code"). To make it secure, we support executing in sandboxed environments via [Blaxel](https://blaxel.ai), [E2B](https://e2b.dev/), [Modal](https://modal.com/), Docker, or Pyodide+Deno WebAssembly sandbox.
+🧑‍💻 **First-class support for Code Agents**. Our [`CodeAgent`](https://github.com/yourusername/intelcore/blob/main/src/intelcore/agents.py) writes its actions in code (as opposed to "agents being used to write code"). To make it secure, we support executing in sandboxed environments via [Blaxel](https://blaxel.ai), [E2B](https://e2b.dev/), [Modal](https://modal.com/), Docker, or Pyodide+Deno WebAssembly sandbox.
 
-🤗 **Hub integrations**: you can [share/pull tools or agents to/from the Hub](https://huggingface.co/docs/smolagents/reference/tools#smolagents.Tool.from_hub) for instant sharing of the most efficient agents!
+🔍 **OSINT Research Focus**: Specialized tools and workflows for evidence-first OSINT research, company intelligence, and relationship mapping.
 
-🌐 **Model-agnostic**: smolagents supports any LLM. It can be a local `transformers` or `ollama` model, one of [many providers on the Hub](https://huggingface.co/blog/inference-providers), or any model from OpenAI, Anthropic and many others via our [LiteLLM](https://www.litellm.ai/) integration.
+🌐 **Model-agnostic**: IntelCore supports any LLM. It can be a local `transformers` or `ollama` model, one of [many providers on the Hub](https://huggingface.co/blog/inference-providers), or any model from OpenAI, Anthropic and many others via our [LiteLLM](https://www.litellm.ai/) integration.
 
-👁️ **Modality-agnostic**: Agents support text, vision, video, even audio inputs! Cf [this tutorial](https://huggingface.co/docs/smolagents/examples/web_browser) for vision.
+👁️ **Modality-agnostic**: Agents support text, vision, video, even audio inputs!
 
-🛠️ **Tool-agnostic**: you can use tools from any [MCP server](https://huggingface.co/docs/smolagents/reference/tools#smolagents.ToolCollection.from_mcp), from [LangChain](https://huggingface.co/docs/smolagents/reference/tools#smolagents.Tool.from_langchain), you can even use a [Hub Space](https://huggingface.co/docs/smolagents/reference/tools#smolagents.Tool.from_space) as a tool.
+🛠️ **Tool-agnostic**: you can use tools from any [MCP server](https://github.com/yourusername/intelcore), from [LangChain](https://github.com/yourusername/intelcore), or create custom tools for your specific needs.
 
-Full documentation can be found [here](https://huggingface.co/docs/smolagents/index).
-
-> [!NOTE]
-> Check the our [launch blog post](https://huggingface.co/blog/smolagents) to learn more about `smolagents`!
+📊 **Evidence-First Approach**: All research outputs include source URLs, snippets, and structured fact storage for reproducibility.
 
 ## Quick demo
 
 First install the package with a default set of tools:
 ```bash
-pip install "smolagents[toolkit]"
+pip install "intelcore[toolkit]"
 ```
 Then define your agent, give it the tools it needs and run it!
 ```py
-from smolagents import CodeAgent, WebSearchTool, InferenceClientModel
+from intelcore import CodeAgent, WebSearchTool, InferenceClientModel
 
 model = InferenceClientModel()
 agent = CodeAgent(tools=[WebSearchTool()], model=model, stream_outputs=True)
@@ -80,7 +62,7 @@ Our library is LLM-agnostic: you could switch the example above to any inference
 <summary> <b>InferenceClientModel, gateway for all <a href="https://huggingface.co/docs/inference-providers/index">inference providers</a> supported on HF</b></summary>
 
 ```py
-from smolagents import InferenceClientModel
+from intelcore import InferenceClientModel
 
 model = InferenceClientModel(
     model_id="deepseek-ai/DeepSeek-R1",
@@ -92,7 +74,7 @@ model = InferenceClientModel(
 <summary> <b>LiteLLM to access 100+ LLMs</b></summary>
 
 ```py
-from smolagents import LiteLLMModel
+from intelcore import LiteLLMModel
 
 model = LiteLLMModel(
     model_id="anthropic/claude-4-sonnet-latest",
@@ -106,7 +88,7 @@ model = LiteLLMModel(
 
 ```py
 import os
-from smolagents import OpenAIModel
+from intelcore import OpenAIModel
 
 model = OpenAIModel(
     model_id="deepseek-ai/DeepSeek-R1",
@@ -120,7 +102,7 @@ model = OpenAIModel(
 
 ```py
 import os
-from smolagents import OpenAIModel
+from intelcore import OpenAIModel
 
 model = OpenAIModel(
     model_id="openai/gpt-4o",
@@ -134,7 +116,7 @@ model = OpenAIModel(
 <summary> <b>Local `transformers` model</b></summary>
 
 ```py
-from smolagents import TransformersModel
+from intelcore import TransformersModel
 
 model = TransformersModel(
     model_id="Qwen/Qwen3-Next-80B-A3B-Thinking",
@@ -148,7 +130,7 @@ model = TransformersModel(
 
 ```py
 import os
-from smolagents import AzureOpenAIModel
+from intelcore import AzureOpenAIModel
 
 model = AzureOpenAIModel(
     model_id = os.environ.get("AZURE_OPENAI_MODEL"),
@@ -163,7 +145,7 @@ model = AzureOpenAIModel(
 
 ```py
 import os
-from smolagents import AmazonBedrockModel
+from intelcore import AmazonBedrockModel
 
 model = AmazonBedrockModel(
     model_id = os.environ.get("AMAZON_BEDROCK_MODEL_ID") 
@@ -192,7 +174,7 @@ Interactive mode guides you through:
 - Advanced options like additional imports
 - Task prompt input
 
-Meanwhile `webagent` is a specific web-browsing agent using [helium](https://github.com/mherrmann/helium) (read more [here](https://github.com/huggingface/smolagents/blob/main/src/smolagents/vision_web_browser.py)).
+Meanwhile `webagent` is a specific web-browsing agent using [helium](https://github.com/mherrmann/helium) (read more [here](https://github.com/yourusername/intelcore/blob/main/src/intelcore/vision_web_browser.py)).
 
 For instance:
 ```bash
@@ -201,7 +183,7 @@ webagent "go to xyz.com/men, get to sale section, click the first clothing item 
 
 ## How do Code agents work?
 
-Our [`CodeAgent`](https://huggingface.co/docs/smolagents/reference/agents#smolagents.CodeAgent) works mostly like classical ReAct agents - the exception being that the LLM engine writes its actions as Python code snippets.
+Our [`CodeAgent`](https://github.com/yourusername/intelcore/blob/main/src/intelcore/agents.py) works mostly like classical ReAct agents - the exception being that the LLM engine writes its actions as Python code snippets.
 
 ```mermaid
 flowchart TB
@@ -252,9 +234,9 @@ By the way, why use a framework at all? Well, because a big part of this stuff i
 
 ## How strong are open models for agentic workflows?
 
-We've created [`CodeAgent`](https://huggingface.co/docs/smolagents/reference/agents#smolagents.CodeAgent) instances with some leading models, and compared them on [this benchmark](https://huggingface.co/datasets/m-ric/agents_medium_benchmark_2) that gathers questions from a few different benchmarks to propose a varied blend of challenges.
+We've created [`CodeAgent`](https://github.com/yourusername/intelcore/blob/main/src/intelcore/agents.py) instances with some leading models, and compared them on various benchmarks.
 
-[Find the benchmarking code here](https://github.com/huggingface/smolagents/blob/main/examples/smolagents_benchmark/run.py) for more detail on the agentic setup used, and see a comparison of using LLMs code agents compared to vanilla (spoilers: code agents works better).
+[Find the benchmarking code here](https://github.com/yourusername/intelcore/blob/main/examples/intelcore_benchmark/run.py) for more detail on the agentic setup used.
 
 <p align="center">
     <img src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/smolagents/benchmark_code_agents.jpeg" alt="benchmark of different models on agentic workflows. Open model DeepSeek-R1 beats closed-source models." width=60% max-width=500px>

@@ -1,6 +1,7 @@
 services:
   app:
     build: .
+    container_name: intelcore-app
     ports:
       - "7862:7860"
     volumes:
@@ -24,18 +25,19 @@ services:
     depends_on:
       - qdrant
     networks:
-      - smolagents-network
+      - intelcore-network
     restart: unless-stopped
 
   qdrant:
     image: qdrant/qdrant:latest
+    container_name: intelcore-qdrant
     ports:
       - "6335:6333"
       - "6336:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     networks:
-      - smolagents-network
+      - intelcore-network
     restart: unless-stopped
 
 volumes:
@@ -44,6 +46,6 @@ volumes:
   app_models:
 
 networks:
-  smolagents-network:
+  intelcore-network:
     driver: bridge
 

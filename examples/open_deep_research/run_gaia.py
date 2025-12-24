@@ -30,7 +30,7 @@ from scripts.text_web_browser import (
 from scripts.visual_qa import visualizer
 from tqdm import tqdm
 
-from smolagents import (
+from intelcore import (
     CodeAgent,
     GoogleSearchTool,
     LiteLLMModel,
@@ -138,7 +138,7 @@ def load_gaia_dataset(use_raw_dataset: bool, set_to_run: str) -> datasets.Datase
         else:
             # WARNING: this dataset is gated: make sure you visit the repo to require access.
             snapshot_download(
-                repo_id="smolagents/GAIA-annotated",
+                repo_id="intelcore/GAIA-annotated",
                 repo_type="dataset",
                 local_dir="data/gaia",
                 ignore_patterns=[".gitattributes", "README.md"],

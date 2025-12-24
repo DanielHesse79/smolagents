@@ -1,6 +1,6 @@
 from run import create_agent
 
-from smolagents.streamlit_ui import StreamlitUI
+from intelcore.streamlit_ui import StreamlitUI
 
 
 agent = create_agent()

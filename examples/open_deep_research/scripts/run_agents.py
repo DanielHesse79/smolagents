@@ -5,7 +5,7 @@ import textwrap
 from pathlib import Path
 
 # import tqdm.asyncio
-from smolagents.utils import AgentError
+from intelcore.utils import AgentError
 
 
 def serialize_agent_error(obj):

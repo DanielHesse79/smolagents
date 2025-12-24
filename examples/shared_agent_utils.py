@@ -14,7 +14,7 @@ from typing import Optional, Callable
 
 # Try to import QdrantMemoryBackend for persistent memory
 try:
-    from smolagents.memory_backends import QdrantMemoryBackend
+    from intelcore.memory_backends import QdrantMemoryBackend
     QDRANT_AVAILABLE = True
 except ImportError:
     QDRANT_AVAILABLE = False
@@ -317,7 +317,7 @@ def check_qdrant_health(
     }
     
     if not QDRANT_AVAILABLE:
-        result["error"] = "Qdrant dependencies not installed. Install with: pip install 'smolagents[qdrant]'"
+        result["error"] = "Qdrant dependencies not installed. Install with: pip install 'intelcore[qdrant]'"
         return result
     
     try:
@@ -1100,7 +1100,7 @@ def setup_ollama_models(
     # Save preferences for next time
     save_model_preferences(programming_model_name, manager_model_name)
     
-    from smolagents import LiteLLMModel
+    from intelcore import LiteLLMModel
     
     try:
         programming_model = LiteLLMModel(
@@ -1137,7 +1137,7 @@ def setup_ollama_models(
 
 def setup_api_models():
     """Setup API models as fallback."""
-    from smolagents import InferenceClientModel, LiteLLMModel
+    from intelcore import InferenceClientModel, LiteLLMModel
     
     print("Using API models")
     
@@ -1169,7 +1169,7 @@ def create_unicode_safe_logger(verbosity_level=1):
     """
     import sys
     import io
-    from smolagents.monitoring import AgentLogger, LogLevel
+    from intelcore.monitoring import AgentLogger, LogLevel
     from rich.console import Console
     
     # Create a console that handles Unicode properly on Windows
@@ -1221,7 +1221,7 @@ def create_programming_agent(
     qdrant_collection_name: str = "microsampling_publications"
 ):
     """Create the programming agent with appropriate tools."""
-    from smolagents import CodeAgent
+    from intelcore import CodeAgent
     
     print("Creating programming agent (DeepSeek R1 8B)...")
     

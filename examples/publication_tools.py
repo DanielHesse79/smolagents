@@ -12,7 +12,7 @@ import os
 import json
 from typing import Optional, Dict, Any
 
-from smolagents import Tool
+from intelcore import Tool
 
 # Try to import Qdrant dependencies
 try:
@@ -229,7 +229,7 @@ class QdrantUpsertTool(Tool):
     def forward(self, collection: str | None, point_id: str, vector_text: str, payload: Dict[str, Any]) -> str:
         """Upsert a publication to Qdrant."""
         if not QDRANT_AVAILABLE:
-            return "Qdrant is not available. Install with: pip install 'smolagents[qdrant]'. Publication will be stored in SQLite only."
+            return "Qdrant is not available. Install with: pip install 'intelcore[qdrant]'. Publication will be stored in SQLite only."
         
         try:
             # Use provided collection or default
@@ -1127,7 +1127,8 @@ class ScrapyVisionTool(Tool):
     inputs = {
         "url": {
             "type": "string",
-            "description": "The URL to scrape (required for single page extraction)"
+            "description": "The URL to scrape (required for single page extraction, optional if start_url is provided)",
+            "nullable": True
         },
         "css_selector": {
             "type": "string",
@@ -1185,7 +1186,7 @@ class ScrapyVisionTool(Tool):
         """Lazy initialization of vision model."""
         if self._vision_model is None:
             try:
-                from smolagents import LiteLLMModel
+                from intelcore import LiteLLMModel
                 self._vision_model = LiteLLMModel(
                     model_id=self.vision_model_id,
                     api_base=self.ollama_base_url,
@@ -2101,8 +2102,13 @@ def generate_osint_report_dossier(
     mode: str,
     facts: list,
     edges: list,
-    score: Optional[Dict[str, Any]] = None
-) -> str:
+    score: Optional[Dict[str, Any]] = None,
+    output_dir: str = "./data"
+) -> tuple[str, str]:
+    """
+    Generate full OSINT report dossier in markdown format.
+    Returns: (markdown_content, pdf_filepath)
+    """
     """Generate full OSINT report dossier in markdown format."""
     from datetime import datetime
     
@@ -2229,7 +2235,18 @@ def generate_osint_report_dossier(
     for url, info in sources.items():
         report_lines.append(f"- [{url}]({url}) (Published: {info['published_date']}, Retrieved: {info['retrieved_at']})")
     
-    return "\n".join(report_lines)
+    markdown_content = "\n".join(report_lines)
+    
+    # Generate suggested PDF filename
+    import os
+    from datetime import datetime
+    safe_company_name = "".join(c for c in target_company if c.isalnum() or c in (' ', '-', '_')).strip()[:50].replace(' ', '_')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pdf_filename = f"{safe_company_name}_{mode}_{timestamp}.pdf"
+    md_filename = f"{safe_company_name}_{mode}_{timestamp}.md"
+    
+    # Return markdown content and suggested filenames
+    return markdown_content, pdf_filename, md_filename
 
 
 def calculate_osint_score(facts: list, edges: list, mode: str) -> Dict[str, Any]:

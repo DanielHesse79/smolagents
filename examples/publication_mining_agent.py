@@ -12,9 +12,9 @@ from dataclasses import dataclass, field
 from textwrap import dedent
 from typing import Iterable
 
-from smolagents import CodeAgent, LiteLLMModel, WebSearchTool
-from smolagents.default_tools import VisitWebpageTool
-from smolagents.memory_backends import MemoryBackend
+from intelcore import CodeAgent, LiteLLMModel, WebSearchTool
+from intelcore.default_tools import VisitWebpageTool
+from intelcore.memory_backends import MemoryBackend
 
 
 @dataclass

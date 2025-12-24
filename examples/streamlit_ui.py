@@ -30,9 +30,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, "src"))
 
-from smolagents import CodeAgent, LiteLLMModel, InferenceClientModel, WebSearchTool
-from smolagents.default_tools import VisitWebpageTool
-from smolagents.streamlit_ui import StreamlitUI
+from intelcore import CodeAgent, LiteLLMModel, InferenceClientModel, WebSearchTool
+from intelcore.default_tools import VisitWebpageTool
+from intelcore.streamlit_ui import StreamlitUI
 
 # Import publication tools and helpers
 try:
@@ -67,7 +67,7 @@ except ImportError as e:
 
 # Try to import QdrantMemoryBackend for persistent memory
 try:
-    from smolagents.memory_backends import QdrantMemoryBackend
+    from intelcore.memory_backends import QdrantMemoryBackend
     QDRANT_AVAILABLE = True
 except ImportError:
     QDRANT_AVAILABLE = False
@@ -248,7 +248,7 @@ def check_qdrant_health(
     }
     
     if not QDRANT_AVAILABLE:
-        result["error"] = "Qdrant dependencies not installed. Install with: pip install 'smolagents[qdrant]'"
+        result["error"] = "Qdrant dependencies not installed. Install with: pip install 'intelcore[qdrant]'"
         return result
     
     try:
@@ -1084,7 +1084,7 @@ def build_memory_backend():
     """Create a Qdrant backend when optional deps are installed."""
     if not QDRANT_AVAILABLE:
         print("Warning: Qdrant dependencies not installed. Agent will continue without persistent memory.")
-        print("Install with: pip install 'smolagents[qdrant]'")
+        print("Install with: pip install 'intelcore[qdrant]'")
         return None
 
     try:

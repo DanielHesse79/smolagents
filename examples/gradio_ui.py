@@ -1,5 +1,5 @@
 """
-Daniel's Army of Agents - Multi-Agent System (Gradio UI)
+IntelCore - OSINT Research Platform (Gradio UI)
 
 This setup uses a manager-agent architecture:
 - Manager Agent (Mistral): Understands user prompts and delegates tasks
@@ -62,9 +62,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, "src"))
 
-# Force reload of smolagents modules to avoid cached bytecode issues
+# Force reload of intelcore modules to avoid cached bytecode issues
 # This ensures we always use the latest code from the source directory
-modules_to_reload = [k for k in sys.modules.keys() if k.startswith('smolagents')]
+modules_to_reload = [k for k in sys.modules.keys() if k.startswith('intelcore')]
 for module in modules_to_reload:
     del sys.modules[module]
 
@@ -72,15 +72,15 @@ try:
     import gradio as gr
 except ImportError:
     raise ImportError(
-        "Gradio is required. Install with: pip install 'smolagents[gradio]' or pip install gradio>=5.50.0"
+        "Gradio is required. Install with: pip install 'intelcore[gradio]' or pip install gradio>=5.50.0"
     )
 
-from smolagents import CodeAgent, ToolCallingAgent, LiteLLMModel, InferenceClientModel, WebSearchTool, GoogleSearchTool
-from smolagents.default_tools import VisitWebpageTool
-from smolagents.agent_types import AgentImage, AgentText
-from smolagents.agents import PlanningStep, RunResult
-from smolagents.memory import ActionStep, FinalAnswerStep
-from smolagents.models import ChatMessageStreamDelta, agglomerate_stream_deltas
+from intelcore import CodeAgent, ToolCallingAgent, LiteLLMModel, InferenceClientModel, WebSearchTool, GoogleSearchTool
+from intelcore.default_tools import VisitWebpageTool
+from intelcore.agent_types import AgentImage, AgentText
+from intelcore.agents import PlanningStep, RunResult
+from intelcore.memory import ActionStep, FinalAnswerStep
+from intelcore.models import ChatMessageStreamDelta, agglomerate_stream_deltas
 
 # Import publication tools and helpers
 try:
@@ -123,8 +123,12 @@ except ImportError as e:
 
 # Import Open Deep Research components
 try:
-    sys.path.insert(0, os.path.join(project_root, "examples", "open_deep_research"))
-    from scripts.text_web_browser import (
+    # Add open_deep_research to path for imports
+    open_deep_research_path = os.path.join(project_root, "examples", "open_deep_research")
+    if open_deep_research_path not in sys.path:
+        sys.path.insert(0, open_deep_research_path)
+    # Import with type: ignore for linter (these are runtime imports)
+    from scripts.text_web_browser import (  # type: ignore
         ArchiveSearchTool,
         FinderTool,
         FindNextTool,
@@ -133,8 +137,8 @@ try:
         SimpleTextBrowser,
         VisitTool,
     )
-    from scripts.text_inspector_tool import TextInspectorTool
-    from scripts.visual_qa import visualizer
+    from scripts.text_inspector_tool import TextInspectorTool  # type: ignore
+    from scripts.visual_qa import visualizer  # type: ignore
     OPEN_DEEP_RESEARCH_AVAILABLE = True
 except ImportError as e:
     OPEN_DEEP_RESEARCH_AVAILABLE = False
@@ -142,7 +146,7 @@ except ImportError as e:
 
 # Try to import QdrantMemoryBackend for persistent memory
 try:
-    from smolagents.memory_backends import QdrantMemoryBackend
+    from intelcore.memory_backends import QdrantMemoryBackend
     QDRANT_AVAILABLE = True
 except ImportError:
     QDRANT_AVAILABLE = False
@@ -188,10 +192,10 @@ def stream_to_gradio(
     max_steps: int | None = None,
 ) -> Generator:
     """Runs an agent with the given task and streams the messages from the agent for Gradio display."""
-    from smolagents.memory import ActionStep, FinalAnswerStep
-    from smolagents.agents import PlanningStep
-    from smolagents.models import ChatMessageStreamDelta, agglomerate_stream_deltas
-    from smolagents.agent_types import AgentImage, AgentText, AgentAudio
+    from intelcore.memory import ActionStep, FinalAnswerStep
+    from intelcore.agents import PlanningStep
+    from intelcore.models import ChatMessageStreamDelta, agglomerate_stream_deltas
+    from intelcore.agent_types import AgentImage, AgentText, AgentAudio
     import re
     from examples.shared_agent_utils import create_unicode_safe_logger
 
@@ -473,8 +477,8 @@ def create_startup_interface() -> tuple:
             gr.update(interactive=result.all_critical_services_ready),
         )
     
-    with gr.Blocks(title="Daniel's Army of Agents - System Startup") as startup_ui:
-        gr.Markdown("# 🚀 Daniel's Army of Agents - System Startup")
+    with gr.Blocks(title="IntelCore - System Startup") as startup_ui:
+        gr.Markdown("# 🚀 IntelCore - System Startup")
         gr.Markdown("Checking system dependencies...")
         
         # Overall status
@@ -615,7 +619,7 @@ class SimpleDocumentReaderTool:
             
             elif ext == ".docx":
                 try:
-                    from docx import Document
+                    from docx import Document  # type: ignore
                     doc = Document(file_path)
                     paragraphs = [p.text for p in doc.paragraphs]
                     return "\n\n".join(paragraphs)
@@ -804,7 +808,7 @@ def create_open_deep_research_agent(model, text_limit=100000):
     
     # Use local DuckDuckGo search instead of GoogleSearchTool (no API key required)
     # If API keys are available, we could use GoogleSearchTool, but for local-only we use DuckDuckGo
-    from smolagents import DuckDuckGoSearchTool, WebSearchTool
+    from intelcore import DuckDuckGoSearchTool, WebSearchTool
     
     # Try DuckDuckGoSearchTool first (requires ddgs package), fallback to WebSearchTool
     try:
@@ -929,55 +933,217 @@ def create_manager_agent_gradio(
         max_steps=20,
         memory_backend=memory_backend,
         enable_experience_retrieval=True,
-        instructions="""You are an evidence-first OSINT and commercial intelligence agent. You build reproducible, source-backed dossiers and relationship maps around target companies. You delegate programming tasks to the 'programmer' agent.
+        instructions="""YOU ARE (ROLE)
+You are an OSINT Commercial-Intelligence Agent. You are evidence-first, skeptical, and you never assume domain details. You hardcode only the investigation process.
+
+MISSION
+Create a business intelligence report about:
+- Target organization: {{COMPANY}}
+- Focus product/service: {{FOCUS_PRODUCT}}
+- Timeframe preference: {{TIMEFRAME}} (example: 2019–today, or "most recent first")
+- Geography preference: {{GEO}} (optional)
+- Audience: {{AUDIENCE}} (example: BD, investors, product, regulatory)
+
+CRITICAL PRINCIPLE
+Do NOT hardcode any application area, use case, technology, omics domain, customer segment, or competitor list.
+Only include a domain topic (example: transcriptomics, proteomics, TDM, DCT, biobanking) if it is explicitly supported by sources you collected for THIS target.
+
+OSINT ETHICS AND BOUNDARIES
+- Use only publicly accessible sources. No logins, no paywall bypass, no submitting forms with personal data.
+- No doxxing or private personal info. Stick to professional/public roles and publications.
+- If a source is low quality, you may use it only as a lead, and you must label it as low confidence until corroborated.
+
+OUTPUTS (DELIVERABLES)
+You must produce these artifacts:
+1) report.md
+   - Executive summary (bullets, source-backed)
+   - Company snapshot (structure, segments, footprint)
+   - Product deep dive (formats, workflow, claims, differentiators)
+   - Evidence-based use-case map (ONLY sourced)
+   - Regulatory/quality posture (ONLY sourced)
+   - Market landscape and competitors (ONLY sourced, otherwise "Unknown")
+   - Go-to-market and channels (ONLY sourced + clearly labeled analysis)
+   - Risks, red flags, contradictions
+   - Recommendations (clearly labeled as analysis, grounded in evidence)
+2) claim_ledger.csv (or .json)
+   Each row/object:
+   - claim_id
+   - claim_text (atomic, one claim)
+   - claim_type (fact, metric, quote, regulatory, pricing, channel, use_case, competitor, timeline)
+   - source_title
+   - source_url
+   - source_owner (company, regulator, distributor, journal, news, other)
+   - publication_date (or "unknown")
+   - retrieved_date
+   - evidence_snippet (short, <= 25 words)
+   - confidence (high/medium/low)
+   - notes (contradictions, missing context)
+3) queries.txt
+   - The exact search queries you used (include multiple languages if relevant)
+4) sources.md
+   - A curated list of sources grouped by type (official, regulator, distributor, literature, news, patents)
+
+HARD-CODED INVESTIGATION PATH (PROCESS)
+Follow these steps in order, every time:
+
+STEP 0: SCOPE LOCK (no assumptions)
+- Restate the mission in 2–3 lines.
+- List what is explicitly requested vs what is NOT requested.
+- Define "unknowns" you must discover, without filling them in.
+
+STEP 1: SOURCE STRATEGY (before searching)
+- Prioritize primary sources: official pages, datasheets/IFUs, regulatory databases, patents, distributor catalogs, peer-reviewed literature.
+- Define a recency bias rule: newest first, but keep foundational older docs.
+- Define triangulation rule: prefer claims supported by 2+ independent sources.
+
+STEP 2: QUERY BUILD (dynamic, not hardcoded)
+Generate query sets based on {{COMPANY}} and {{FOCUS_PRODUCT}} only:
+- Official: site:{{COMPANY_DOMAIN}} {{FOCUS_PRODUCT}} datasheet | IFU | brochure | "instructions for use"
+- Regulatory: {{FOCUS_PRODUCT}} CE | IVDR | FDA | "declaration of conformity" | "Udi" | "classification"
+- Distributor: {{FOCUS_PRODUCT}} catalog | SKU | "pack size" | "price" | "availability"
+- Literature: "{{FOCUS_PRODUCT}}" OR "{{COMPANY}} {{FOCUS_PRODUCT}}" publication | poster | abstract
+- Patents: {{COMPANY}} patent + key product terms
+Also generate language variants relevant to {{GEO}} (example: Swedish, German, French) if it improves recall.
+
+STEP 3: COLLECT AND EXTRACT (ledger first)
+- For every meaningful claim, create a Claim Ledger entry immediately.
+- Do not write narrative sections until you have a minimum viable ledger (at least 25 claims or until sources are exhausted).
+- Mark missing dates as "unknown", do not invent.
+
+STEP 4: VALIDATE AND RESOLVE CONFLICTS
+- Detect contradictions (example: two different specs, dates, regulatory statuses).
+- Resolve by preferring regulator/official IFU over marketing pages.
+- If unresolved, keep both claims and label the conflict.
+
+STEP 5: BUILD THE REPORT (facts vs analysis separation)
+- Every non-trivial statement must map to a claim_id in the ledger.
+- Facts: cite source_url and claim_id.
+- Analysis: clearly label as ANALYSIS and tie back to evidence.
+
+STEP 6: STOP CONDITIONS
+- If sources are insufficient, say so explicitly in the report and list "What we could not verify" and "Next best sources to check".
+- Never fill gaps with generic industry assumptions.
+
+STYLE RULES
+- Be concise and structured.
+- Use plain language.
+- Avoid buzzwords unless a source uses them.
+- Do not "sell". This is intelligence, not marketing copy.
+
+NOW EXECUTE
+Create the four artifacts. If you are in an IDE workflow, create/overwrite these files in a /research folder:
+- /research/report.md
+- /research/claim_ledger.csv (or .json)
+- /research/queries.txt
+- /research/sources.md
+
+DELEGATION TO PROGRAMMER:
+- Delegate ALL programming tasks (code, data processing, file operations, database queries, report generation, fact extraction)
+- Provide clear task descriptions with expected inputs/outputs
+- When delegating code, ensure the programmer writes VALID Python syntax with proper indentation
+- Review delegated code for syntax errors before execution - catch issues early
+- Use store_atomic_fact() for each fact extracted
+- Use store_relationship_edge() for relationship mapping
+- Delegate file creation: write_markdown_file(), write_pdf_file()
+- Delegate report generation: generate_osint_report_dossier(), generate_evidence_table_markdown(), generate_relationship_edges_table()
+
+CRITICAL SEARCH WORKFLOW:
+- When researching a company, ALWAYS start with web_search() to find the actual company website
+- NEVER guess or hardcode URLs like "https://companyname.com" - these often don't exist
+- NEVER use scrapy_extract() or visit_webpage() with URLs you haven't verified through search
+- Workflow: 1) Search for company → 2) Extract website URL from results → 3) Visit website → 4) Then extract data
+- If search doesn't find a website, report "No website found for [Company]" and continue with other sources
+
+CRITICAL RESTRICTIONS (remind programmer):
+1. IMPORT RISK ASSESSMENT: Imports are assessed by risk level.
+   - LOW RISK (always allowed): math, json, datetime, pandas, numpy, re, collections, PIL
+   - MEDIUM RISK (allowed with warnings): os, sys, requests, io, pickle, threading
+   - HIGH RISK (always blocked): subprocess, socket, multiprocessing, ctypes, builtins
+   ⚠️ CRITICAL: Never create a variable called 'authorized_imports' - this is informational text only!
+
+2. FORBIDDEN OPERATIONS: eval(), exec(), compile(), globals(), locals(), __import__()
+   Forbidden dunder access: __class__, __dict__, __module__ (use type(obj), vars(obj) instead)
+
+3. FORBIDDEN SYNTAX: NEVER use '...' (ellipsis) in unpacking. Use '*rest' or indexing instead.
+
+4. CODE FORMAT: Always wrap code in <code>...</code> tags when delegating.
+
+5. CODE STRUCTURE & SYNTAX (CRITICAL):
+   - ALWAYS use proper Python indentation (4 spaces per level)
+   - ALWAYS include a body after if/for/while/def statements - never leave them empty
+   - Use pass if you need an empty block: `if condition: pass`
+   - Test your code mentally before delegating - ensure all blocks are properly indented
+
+ERROR HANDLING:
+- If programmer errors occur, guide them to: log_agent_error, analyze_error_patterns(), get_learning_suggestions(), update_learning_pattern()
+- After errors, remind: "Learn from the error. Document it, analyze patterns, build prevention."
+
+PUBLICATION MINING (SUPPLEMENTARY RESEARCH):
+- Use pubmed_search() ONLY for scientific/clinical context when researching companies/products
+- For company research, prioritize business intelligence, competitive analysis, and market research
+- Academic publications are valuable for: clinical validation, scientific studies, research collaborations
+- Use web_search() and visit_webpage() as PRIMARY research methods for company intelligence
+- CRITICAL: pubmed_search() returns a STRING, not a list! You MUST parse it to extract the JSON data.
+- The output contains [STRUCTURED_DATA]...[/STRUCTURED_DATA] tags with JSON inside.
+- Delegate to programmer for: parsing JSON, filtering by affiliations, deduplication (use DOI/PMID/hash), storing (qdrant_upsert_publication, sql_upsert_publication), writing markdown and PDF files, researcher tracking (upsert_researcher, link_researcher_publication)
 
 DELEGATION:
 - Provide clear task descriptions with expected inputs/outputs
 - Delegate ALL programming tasks (code, data processing, file operations, database queries, report generation, fact extraction)
 - Handle non-programming tasks yourself (web search, information gathering, webpage visits)
+- When delegating code, ensure the programmer writes VALID Python syntax with proper indentation
+- Review delegated code for syntax errors before execution - catch issues early
+
+CRITICAL SEARCH WORKFLOW:
+- When researching a company, ALWAYS start with web_search() to find the actual company website
+- NEVER guess or hardcode URLs like "https://companyname.com" - these often don't exist
+- NEVER use scrapy_extract() or visit_webpage() with URLs you haven't verified through search
+- Workflow: 1) Search for company → 2) Extract website URL from results → 3) Visit website → 4) Then extract data
+- If search doesn't find a website, report "No website found for [Company]" and continue with other sources
 
 PRIMARY INPUTS (extract from user query or use defaults):
 - TargetCompany: Extract company name from user query
 - TargetCompanyWebsite: Extract from search results or use "unknown"
 - Mode: COMPETITOR or PARTNER (extract from query, default to COMPETITOR if unclear)
 - Timeframe: Extract from query or use "2019–present" as default
-- Geography Focus: Extract from query or use "Global" as default
-- Industry/Domain: Extract from query or infer from company context
+- Geography Focus: Extract from query or use "EU + US" as default
+- Industry/Domain: Extract from query or infer from company context (e.g., life science tools, diagnostics, CRO, biotech, SaaS)
 - OutputDepth: light, standard, or deep (default to "deep")
-- Hard Constraints: Only public sources, English language, no paywall bypass
+- Hard Constraints: Extract from query or use "public sources only; no logins; English language" as default
 
 NON-NEGOTIABLE RULES:
-1) Evidence-first: Every non-trivial claim must include at least one direct source URL and a short snippet (10–30 words) that supports it. Use store_atomic_fact() for each fact.
-2) Prefer primary sources: official site pages, press releases, annual reports, regulatory filings, investor decks, conference programs, publications, job ads, procurement portals.
-3) No paywall bypass, no logins, no scraping private gated data, no doxxing. Do not infer private emails/phone numbers. Use only publicly posted contact channels.
+1) Evidence-first: Every non-trivial claim must include at least one direct source URL and a short snippet (10–30 words) supporting it. Use store_atomic_fact() for each fact.
+2) Prefer primary sources: official pages, press releases, annual reports, filings, investor decks, patents, conference programs, publications, job ads, company registry extracts.
+3) No paywall bypass, no logins, no scraping gated data, no doxxing. Do not infer private emails/phone numbers. Use only publicly posted contact channels.
 4) Track freshness: record publish date (or "unknown") and retrieval date for each source.
-5) Deduplicate: If the same press release is reposted, treat it as one source and note syndication.
-6) If evidence conflicts, report the conflict explicitly, do not resolve it by guessing.
+5) Deduplicate: syndicated reposts count as one source; note syndication.
+6) If evidence conflicts, report the conflict explicitly. Never resolve by guessing.
 
 HIGH-LEVEL MISSION:
-Build a source-backed dossier on TargetCompany, then build a relationship graph including:
-- Customers (who buys from them, who they sell to)
-- Partners (collaboration, distribution, alliances)
-- Competitors (direct and adjacent)
-- Suppliers/technology dependencies (platforms, key tooling, OEM links when evidenced)
-- People (leadership, key technical/commercial figures, hiring signals)
+Build a source-backed dossier on TargetCompany and a relationship graph including:
+- Customers, partners, competitors, distributors, suppliers/tech dependencies
+- Key people and teams
+- (Deep Research only) patents/IP signals, hiring signals, governance signals (board/executive changes)
 
-TWO-TRACK INTENT (Mode):
+MODE-SPECIFIC INTENT:
 A) If Mode = COMPETITOR
-   Focus more on:
-   - Who they already worked with (customers, partners, distributors, OEMs, consortiums)
+   Emphasize:
+   - Who they already worked with: customers, partners, distributors, OEMs, consortiums
    - Proof of traction: contracts, case studies, "trusted by", reference logos, deployments
-   - Where they sell: geographies, verticals, segments
-   - Differentiators: claims that show how they position against others ("vs", "alternative to", "replaces")
-   - Weak points: complaints, negative reviews, compliance incidents (only if sourced)
+   - Positioning and differentiators: "vs", "alternative", "replaces"
+   - Weak points: credible negative signals (only if sourced)
 
 B) If Mode = PARTNER
-   Focus more on:
-   - Who their competitors are (so we understand conflicts and positioning)
-   - Who their potential customers are (segments they target, current gaps, buyer personas)
-   - Partnership fit: where a collaboration makes sense (distribution gaps, complementary tech, channel needs)
-   - Go-to-market signals: hiring for BD, partnerships, channel managers, distributors, regional expansion
-   - Integration surface: APIs, workflows, sample logistics, manufacturing, regulatory readiness, QA systems
+   Emphasize:
+   - Who their competitors are (conflict and positioning)
+   - Who their potential customers are (segments, buyer personas, gaps)
+   - Partnership fit: channels, distribution gaps, complementary tech, integration surface
+   - Go-to-market signals from hiring and announcements
+
+OUTPUTDEPTH BEHAVIOR:
+- light: core snapshot + top relationships
+- standard: full relationship map + competitive landscape + hiring scan
+- deep: everything in standard PLUS dedicated IP, Hiring, Governance modules with timelines and structured extraction
 
 COMPANY & PRODUCT OSINT RESEARCH:
 When users ask about companies or products, conduct COMPREHENSIVE deep research covering ALL of these areas:
@@ -1042,38 +1208,108 @@ When users ask about companies or products, conduct COMPREHENSIVE deep research 
    - Research collaborations with academic institutions
    - Scientific validation and peer-reviewed evidence
 
-SOURCE BASKETS (use as checklists):
-- Official: website pages (solutions, products, customers), blog, news/press, documentation, careers
-- Corporate: annual report, filings, investor decks, company registry (if public), certifications (ISO, CLIA, etc.)
-- Market presence: conference programs, webinars, posters, slides, public talks
+SOURCE BASKETS (checklists):
+- Official: website pages, docs, blog, press/news, careers
+- Corporate: annual reports, filings, investor decks, certifications, procurement
+- Market presence: conference programs, webinars, posters, public talks
 - Scientific: publications, posters, patents (if relevant)
-- Hiring: job postings (own site + aggregators) with keywords that reveal capabilities/stack
+- Hiring: job postings (company + aggregators) + role keywords
 - Ecosystem: distributors/resellers, marketplaces, partner pages, OEM references
-- Independent: reputable media, analyst notes (only if publicly accessible), customer reviews (handle carefully)
+- Independent: reputable media, customer reviews (handle carefully)
+- Governance (deep): company registries, board announcements, filings, official notices
 
 SEARCH STRATEGY (run in passes):
+CRITICAL: ALWAYS search for the company FIRST before attempting to scrape or extract data!
+- NEVER assume a company website URL - ALWAYS search to find the actual website
+- NEVER use hardcoded URLs like "https://companyname.com" without first verifying the actual domain
+- NEVER use scrapy_extract() or visit_webpage() with guessed URLs
+
+Pass 0: Company Discovery (MANDATORY FIRST STEP)
+- "<TargetCompany>" OR "<TargetCompany> company" OR "<TargetCompany> website"
+- Extract the ACTUAL website URL from search results
+- Visit the website to understand its structure
+- Only THEN proceed with extraction using the verified URL
+
 Pass 1: Broad discovery
-- "<TargetCompany> customers"
+- "<TargetCompany> customers" | "<TargetCompany> case study" | "<TargetCompany> success story"
 - "<TargetCompany> partner" OR "distribution" OR "reseller" OR "OEM"
-- "<TargetCompany> case study" OR "success story"
 - "<TargetCompany> vs" OR "alternative" OR "compared to"
 - "<TargetCompany> conference" OR "webinar" OR "poster" OR "abstract"
-- "<TargetCompany> site:<their domain> pdf" OR "filetype:pdf"
+- "<TargetCompany> site:<their domain> filetype:pdf" (only after verifying domain in Pass 0)
 
 Pass 2: Relationship mining
-- For each discovered partner/customer/competitor, run:
-  - "<TargetCompany> AND <EntityName> partnership"
-  - "<TargetCompany> AND <EntityName> customer"
-  - "<EntityName> AND <TargetCompany> distributor"
-  - "<TargetCompany> AND <EntityName> agreement" OR "contract" OR "pilot"
+For each discovered entity X (customer/partner/competitor):
+- "<TargetCompany> AND X partnership"
+- "<TargetCompany> AND X customer"
+- "<TargetCompany> AND X distributor" OR "reseller" OR "OEM"
+- "<TargetCompany> AND X agreement" OR "contract" OR "pilot"
 
 Pass 3: Competitive landscape
-- Identify 10–30 competitors across direct, adjacent, and substitute categories.
-- For each competitor: note differentiation claims with sources.
+- Identify 10–30 competitors across direct, adjacent, substitute categories.
+- Extract differentiation claims with sources.
 
-Pass 4: Hiring + signals
-- Extract capabilities, tech stack, and GTM intent from job ads:
-  - keywords: "partnerships", "channel", "KAM", "regulatory", "validation", "GxP", "ISO", "automation", "API", etc.
+Pass 4: Hiring + capability signals (standard+)
+- "<TargetCompany> jobs" | "<TargetCompany> careers"
+- site:greenhouse.io OR lever.co OR workable.com OR teamtailor.com OR linkedin jobs "<TargetCompany>"
+- Extract stack, compliance, partnerships, channel, QA/RA, manufacturing, automation signals.
+
+DEEP RESEARCH MODULES (only when OutputDepth = deep):
+
+Module D1: Patent and IP Intelligence
+Goal: map the company's innovation footprint and strategic direction.
+Sources:
+- Google Patents, Espacenet (EPO), WIPO Patentscope, USPTO, national registries when relevant
+Search queries:
+- "<TargetCompany> patent" | "<TargetCompany> assignee" | "<TargetCompany> inventor"
+- "<TargetCompany> site:patentscope.wipo.int"
+- "<TargetCompany> site:worldwide.espacenet.com"
+Extraction requirements per patent family:
+- publication_number, application_number (if available), status (application/granted), assignee, inventors
+- priority_date, filing_date, publication_date, jurisdictions
+- title, abstract summary (paraphrase), key claims themes (high level only)
+- citations (forward/backward if available), related families
+Output:
+- Patent Portfolio Summary with timeline
+- Key technology themes and strategic focus areas
+- Competitive IP positioning
+
+Module D2: Hiring Intelligence
+Goal: extract capability signals, stack, compliance readiness, GTM intent from job postings.
+Sources:
+- Company careers page, Greenhouse, Lever, Workable, Teamtailor, LinkedIn Jobs, Indeed, Glassdoor
+Search queries:
+- "<TargetCompany> jobs" | "<TargetCompany> careers"
+- site:greenhouse.io "<TargetCompany>" | site:lever.co "<TargetCompany>"
+- site:workable.com "<TargetCompany>" | site:teamtailor.com "<TargetCompany>"
+Extraction requirements per job posting:
+- role_title, department, location, posted_date, job_id/url
+- required_skills, preferred_skills, tech_stack_mentions
+- compliance_keywords: "GxP", "ISO", "CLIA", "FDA", "CE", "IVD", "MDR", "validation", "QA", "RA"
+- partnership_keywords: "partnerships", "channel", "KAM", "BD", "distributor", "reseller"
+- manufacturing_keywords: "manufacturing", "production", "supply chain", "logistics"
+- automation_keywords: "automation", "API", "integration", "workflow"
+Output:
+- Hiring Timeline (by department/role type)
+- Capability Signals Matrix (compliance, partnerships, manufacturing, automation)
+- GTM Intent Analysis (expansion signals, channel development, integration readiness)
+
+Module D3: Governance Intelligence
+Goal: track board/executive changes, ownership shifts, regulatory filings, official notices.
+Sources:
+- Company registries (UK Companies House, SEC EDGAR, national equivalents), press releases, LinkedIn executive updates, news articles
+Search queries:
+- "<TargetCompany> board" | "<TargetCompany> executive" | "<TargetCompany> CEO" | "<TargetCompany> CTO"
+- "<TargetCompany> site:companieshouse.gov.uk" | "<TargetCompany> site:sec.gov"
+- "<TargetCompany> filing" | "<TargetCompany> registry"
+Extraction requirements:
+- executive_name, role, start_date, end_date (if changed), previous_role, source
+- board_member_name, role, appointment_date, source
+- ownership_changes, major_shareholder_changes, source
+- regulatory_filings (type, date, summary), source
+Output:
+- Executive Timeline
+- Board Composition and Changes
+- Ownership and Regulatory Events Timeline
 
 DATA EXTRACTION REQUIREMENTS:
 For every extracted fact, create an "AtomicFact" using store_atomic_fact():
@@ -1139,10 +1375,22 @@ OUTPUT FILES:
 - When users ask for information about companies or products, ALWAYS:
   1. Extract facts using store_atomic_fact() for each piece of evidence
   2. Extract relationships using store_relationship_edge() for each connection
-  3. Generate markdown report using generate_osint_report_dossier()
-  4. Create PDF using write_pdf_file()
-  5. Create markdown file using write_markdown_file()
-- Mention the file paths in your final answer so users know where to find the reports
+  3. Generate markdown report using generate_osint_report_dossier() - it returns (markdown_content, pdf_filename, md_filename)
+  4. Create PDF using write_pdf_file(pdf_filename, markdown_content, title=f"{target_company} - {mode} OSINT Report")
+  5. Create markdown file using write_markdown_file(md_filename, markdown_content)
+  6. IMPORTANT: Always include the FULL file paths in your final answer with clear instructions:
+     Example format:
+     ```
+     📄 **Reports Generated:**
+     - PDF Report: `/app/data/Telimmune_COMPETITOR_20241215_143022.pdf`
+     - Markdown Report: `/app/data/Telimmune_COMPETITOR_20241215_143022.md`
+     - JSON Data: `/app/data/atomic_facts.json`, `/app/data/relationship_edges.json`
+     
+     **Note:** Files are saved in the Docker volume. To access them:
+     - On Windows: Check Docker Desktop > Volumes > app_data
+     - Or copy from container: `docker cp intelcore-app-1:/app/data/[filename] ./`
+     ```
+  7. Always mention the exact filenames and paths so users can locate the files
 
 UNDERSTANDING USER INTENT:
 - When users ask about companies or products, conduct FULL OSINT research covering all areas above
@@ -1167,6 +1415,24 @@ CRITICAL RESTRICTIONS (remind programmer):
 3. FORBIDDEN SYNTAX: NEVER use '...' (ellipsis) in unpacking. Use '*rest' or indexing instead.
 
 4. CODE FORMAT: Always wrap code in <code>...</code> tags when delegating.
+
+5. CODE STRUCTURE & SYNTAX (CRITICAL):
+   - ALWAYS use proper Python indentation (4 spaces per level)
+   - ALWAYS include a body after if/for/while/def statements - never leave them empty
+   - Use pass if you need an empty block: `if condition: pass`
+   - Test your code mentally before delegating - ensure all blocks are properly indented
+   - Example of CORRECT code:
+     ```python
+     if result:
+         website_url = result[0].link
+     else:
+         website_url = None
+     ```
+   - Example of WRONG code (will cause syntax error):
+     ```python
+     if result:
+     website_url = result[0].link  # Missing indentation!
+     ```
 
 ERROR HANDLING:
 - If programmer errors occur, guide them to: log_agent_error, analyze_error_patterns(), get_learning_suggestions(), update_learning_pattern()
@@ -1648,8 +1914,180 @@ def main():
     print("[STARTUP] Building Gradio interface...")
     import sys
     sys.stdout.flush()
-    with gr.Blocks(title="Daniel's Army of Agents") as main_ui:
-        gr.Markdown("# 🚀 Daniel's Army of Agents")
+    # CSS for modern design - will be passed to launch()
+    custom_css = """
+        /* Modern Design Improvements */
+        :root {
+            --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Main header styling */
+        h1 {
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 700 !important;
+            font-size: 2.5rem !important;
+            margin-bottom: 1.5rem !important;
+            text-align: center;
+        }
+        
+        /* Hide examples table completely - Gradio auto-generates it when additional_inputs are used */
+        .examples-container,
+        .examples-table,
+        [data-testid="examples"],
+        div:has(> .examples-container),
+        .gradio-container:has(.examples-container),
+        .gradio-chatinterface:has(.examples-container),
+        table:has(th:contains("Research Mode")),
+        table:has(th:contains("Examples")),
+        .examples-wrapper,
+        .gradio-chatinterface .examples,
+        .gradio-chatinterface .examples-container,
+        div:has(> table:has(th:contains("Research Mode"))) {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            overflow: hidden !important;
+        }
+        
+        /* Enhanced file upload styling */
+        .upload-area, .file-upload-area {
+            min-height: 120px !important;
+            border: 2px dashed #667eea !important;
+            border-radius: 12px !important;
+            padding: 20px !important;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%) !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        .upload-area:hover, .file-upload-area:hover {
+            border-color: #764ba2 !important;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%) !important;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md) !important;
+        }
+        
+        /* File upload button styling */
+        .upload-button, button[aria-label*="Upload"] {
+            background: var(--gradient-primary) !important;
+            border: none !important;
+            border-radius: 8px !important;
+            padding: 12px 24px !important;
+            font-weight: 600 !important;
+            box-shadow: var(--shadow-md) !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        .upload-button:hover, button[aria-label*="Upload"]:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg) !important;
+        }
+        
+        /* Image upload specific styling */
+        .image-upload-area {
+            min-height: 120px !important;
+            border: 2px dashed #f5576c !important;
+            border-radius: 12px !important;
+            padding: 20px !important;
+            background: linear-gradient(135deg, rgba(245, 87, 108, 0.05) 0%, rgba(240, 147, 251, 0.05) 100%) !important;
+        }
+        
+        .image-upload-area:hover {
+            border-color: #f093fb !important;
+            background: linear-gradient(135deg, rgba(245, 87, 108, 0.1) 0%, rgba(240, 147, 251, 0.1) 100%) !important;
+        }
+        
+        /* Label text improvements */
+        label, .label-text {
+            font-weight: 600 !important;
+            font-size: 1rem !important;
+            color: #1e293b !important;
+            margin-bottom: 8px !important;
+        }
+        
+        /* Info text styling */
+        .info-text, .gr-info {
+            font-size: 0.875rem !important;
+            color: #64748b !important;
+            line-height: 1.5 !important;
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+        }
+        
+        /* Radio buttons and checkboxes */
+        .radio-group, .checkbox-group {
+            padding: 16px !important;
+            border-radius: 8px !important;
+            background: rgba(102, 126, 234, 0.03) !important;
+            border: 1px solid rgba(102, 126, 234, 0.1) !important;
+        }
+        
+        /* Accordion styling */
+        .accordion {
+            border-radius: 8px !important;
+            overflow: hidden !important;
+            box-shadow: var(--shadow-md) !important;
+        }
+        
+        /* Button improvements */
+        button {
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        button.primary {
+            background: var(--gradient-primary) !important;
+            box-shadow: var(--shadow-md) !important;
+        }
+        
+        button.primary:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg) !important;
+        }
+        
+        /* Tab styling */
+        .tab-nav {
+            border-bottom: 2px solid rgba(102, 126, 234, 0.1) !important;
+        }
+        
+        .tab-nav button {
+            border-radius: 8px 8px 0 0 !important;
+        }
+        
+        /* Card-like containers */
+        .gr-column, .gr-row {
+            gap: 16px !important;
+        }
+        
+        /* Chat interface improvements */
+        .chat-container {
+            border-radius: 12px !important;
+            box-shadow: var(--shadow-md) !important;
+            padding: 20px !important;
+        }
+        """
+    
+    with gr.Blocks(
+        title="IntelCore - OSINT Research Platform",
+    ) as main_ui:
+        gr.Markdown(
+            """
+            # 🚀 IntelCore - OSINT Research Platform
+            
+            <div style="text-align: center; margin-top: -10px; margin-bottom: 20px;">
+                <p style="color: #64748b; font-size: 1.1rem;">
+                    Evidence-First Intelligence Gathering & Analysis
+                </p>
+            </div>
+            """
+        )
         
         # State for startup result and config (these are pickleable)
         startup_result_state = gr.State(value=startup_result)
@@ -1657,7 +2095,7 @@ def main():
         
         with gr.Tabs() as tabs:
             # Chat Tab (moved to first position to be default)
-            with gr.Tab("Chat"):
+            with gr.Tab("💬 Chat"):
                 chat_container = gr.Column(visible=_global_manager_agent is not None)
                 init_container = gr.Column(visible=_global_manager_agent is None)
                 
@@ -1750,7 +2188,7 @@ def main():
                         gr.Markdown("### Chat with the agents")
                         
                         # Chat function for ChatInterface
-                        def chat_fn(message, history, files, images, selected_model=None, osint_mode="COMPETITOR", osint_timeframe="2019–present", osint_geography="Global", osint_industry="", osint_depth="deep", osint_constraints="Only public sources, English language", use_open_deep_research=False):
+                        def chat_fn(message, history, files, images, selected_model=None, osint_mode="COMPETITOR", include_academic=False, osint_timeframe="2019–present", osint_geography="Global", osint_industry="", osint_depth="deep", osint_constraints="Only public sources, English language", use_open_deep_research=False):
                             """Handle chat messages with PDF reading and vision model auto-selection."""
                             try:
                                 global _global_manager_agent
@@ -1764,14 +2202,23 @@ def main():
                                     yield "❌ Please provide a message."
                                     return
                                 
-                                # Enhance message with OSINT parameters if it's a company research query
-                                # Detect if this is a company research query (contains company name, "research", "OSINT", etc.)
-                                company_research_keywords = ["company", "research", "osint", "dossier", "competitor", "partner", "analyze", "intelligence"]
-                                is_company_research = any(keyword in message.lower() for keyword in company_research_keywords)
+                                # Enhance message with OSINT parameters if it's a research query
+                                # Detect if this is a research query (contains company name, "research", "OSINT", "publications", etc.)
+                                research_keywords = ["company", "research", "osint", "dossier", "competitor", "partner", "analyze", "intelligence", "publications", "studies", "academic"]
+                                is_research_query = any(keyword in message.lower() for keyword in research_keywords)
                                 
-                                if is_company_research:
-                                    osint_context = f"\n\n[OSINT Research Parameters]\nMode: {osint_mode}\nTimeframe: {osint_timeframe}\nGeography: {osint_geography}\nIndustry: {osint_industry or 'Not specified'}\nDepth: {osint_depth}\nConstraints: {osint_constraints}\n\nPlease conduct evidence-first OSINT research following the specified parameters."
-                                    message = message + osint_context
+                                if is_research_query:
+                                    # Handle ACADEMIC mode or include_academic flag
+                                    if osint_mode == "ACADEMIC" or include_academic:
+                                        academic_context = "\n\n[Research Parameters]\nMode: ACADEMIC (or include academic sources)\nPlease search PubMed and academic databases for relevant publications, studies, and research."
+                                        message = message + academic_context
+                                    
+                                    if osint_mode in ["COMPETITOR", "PARTNER"]:
+                                        osint_context = f"\n\n[OSINT Research Parameters]\nMode: {osint_mode}\nTimeframe: {osint_timeframe}\nGeography: {osint_geography}\nIndustry: {osint_industry or 'Not specified'}\nDepth: {osint_depth}\nConstraints: {osint_constraints}"
+                                        if include_academic:
+                                            osint_context += "\nAlso include academic research: Yes"
+                                        osint_context += "\n\nPlease conduct evidence-first OSINT research following the specified parameters."
+                                        message = message + osint_context
                                 
                                 # Maximum input length (configurable via AGENT_MAX_INPUT_LENGTH env var)
                                 MAX_TOTAL_INPUT = int(os.getenv("AGENT_MAX_INPUT_LENGTH", "50000"))
@@ -1982,84 +2429,106 @@ def main():
                         # chat_fn signature: (message, history, files, images, selected_model, use_open_deep_research)
                         additional_inputs = []
                         
-                        file_upload = gr.File(
-                            label="Upload files",
-                            file_count="multiple",
-                            file_types=[".pdf", ".docx", ".txt", ".xlsx", ".pptx"],
-                        )
+                        # Enhanced file and image uploads with better styling
+                        gr.Markdown("### 📎 Upload Files or Images")
+                        with gr.Row():
+                            file_upload = gr.File(
+                                label="📄 Files (PDF, DOCX, TXT, XLSX, PPTX)",
+                                file_count="multiple",
+                                file_types=[".pdf", ".docx", ".txt", ".xlsx", ".pptx"],
+                                height=160,
+                                scale=1,
+                                show_label=True,
+                                container=True
+                            )
+                            image_upload = gr.Image(
+                                label="🖼️ Images (for visual analysis or OCR)",
+                                type="pil",
+                                sources=["upload"],
+                                height=160,
+                                scale=1,
+                                show_label=True,
+                                container=True
+                            )
                         additional_inputs.append(file_upload)
-                        
-                        image_upload = gr.Image(
-                            label="Upload images",
-                            type="pil",
-                            sources=["upload"],
-                            height=200,
-                        )
                         additional_inputs.append(image_upload)
                         
-                        # OSINT Research Mode Selection
-                        osint_mode = gr.Dropdown(
-                            label="OSINT Research Mode",
-                            choices=["COMPETITOR", "PARTNER"],
+                        # OSINT Research Mode Selection - as radio buttons for better UX
+                        gr.Markdown("### 🔍 Research Configuration")
+                        osint_mode = gr.Radio(
+                            label="Research Mode",
+                            choices=[
+                                ("COMPETITOR", "🎯 COMPETITOR - Focus on customers, traction, differentiators"),
+                                ("PARTNER", "🤝 PARTNER - Focus on partnership fit, integration, GTM signals"),
+                                ("ACADEMIC", "📚 ACADEMIC - Focus on scientific publications, studies, research")
+                            ],
                             value="COMPETITOR",
                             interactive=True,
-                            info="COMPETITOR: Focus on customers, traction, differentiators. PARTNER: Focus on partnership fit, integration, GTM signals."
+                            info="Select the research focus mode for your OSINT analysis",
+                            container=True
                         )
                         additional_inputs.append(osint_mode)
                         
+                        # Include academic research checkbox (for COMPETITOR/PARTNER modes)
+                        include_academic = gr.Checkbox(
+                            label="📖 Also include academic research",
+                            value=False,
+                            info="When enabled, will also search PubMed and academic sources in addition to business intelligence",
+                            interactive=True,
+                            container=True
+                        )
+                        additional_inputs.append(include_academic)
+                        
                         # Optional OSINT parameters (collapsible)
-                        with gr.Accordion("Advanced OSINT Parameters (Optional)", open=False):
+                        with gr.Accordion("⚙️ Advanced OSINT Parameters (Optional)", open=False):
                             osint_timeframe = gr.Textbox(
                                 label="Timeframe",
                                 value="2019–present",
                                 placeholder="e.g., 2019–present, 2020–2024",
-                                info="Time period for research focus"
+                                info="Time period for research focus",
+                                interactive=True
                             )
                             osint_geography = gr.Textbox(
                                 label="Geography Focus",
                                 value="Global",
                                 placeholder="e.g., EU + US, North America, Europe",
-                                info="Geographic regions to focus on"
+                                info="Geographic regions to focus on",
+                                interactive=True
                             )
                             osint_industry = gr.Textbox(
                                 label="Industry/Domain",
                                 value="",
                                 placeholder="e.g., life science tools, diagnostics, CRO, biotech, SaaS",
-                                info="Industry or domain context"
+                                info="Industry or domain context",
+                                interactive=True
                             )
                             osint_depth = gr.Dropdown(
                                 label="Output Depth",
                                 choices=["light", "standard", "deep"],
                                 value="deep",
-                                info="Research depth: light (quick), standard (balanced), deep (comprehensive)"
+                                info="Research depth: light (quick), standard (balanced), deep (comprehensive)",
+                                interactive=True,
+                                allow_custom_value=True
                             )
                             osint_constraints = gr.Textbox(
                                 label="Hard Constraints",
                                 value="Only public sources, English language",
                                 placeholder="e.g., only public sources, English + Swedish, exclude certain markets",
-                                info="Constraints for research"
+                                info="Constraints for research",
+                                interactive=True
                             )
                         
-                        # Model selection if Ollama available (must come before use_open_deep_research)
-                        if _global_startup_result and _global_startup_result.ollama["available"] and _global_startup_result.ollama["models"]:
-                            # Default to current manager model if set, otherwise first available
-                            default_model = None
-                            if _global_current_manager_model and _global_current_manager_model in _global_startup_result.ollama["models"]:
-                                default_model = _global_current_manager_model
-                            elif _global_startup_result.ollama["models"]:
-                                default_model = _global_startup_result.ollama["models"][0]
-                            model_dropdown = gr.Dropdown(
-                                label="Select Ollama Model",
-                                choices=_global_startup_result.ollama["models"],
-                                value=default_model,
-                                interactive=True,
-                                info="Changes model for this chat session"
-                            )
-                            additional_inputs.append(model_dropdown)
-                        else:
-                            # Add hidden dummy component if no model dropdown (Gradio doesn't accept None)
-                            model_dropdown = gr.Textbox(value="", visible=False)
-                            additional_inputs.append(model_dropdown)
+                        # Add OSINT parameters to additional_inputs (must be in same order as chat_fn parameters)
+                        additional_inputs.append(osint_timeframe)
+                        additional_inputs.append(osint_geography)
+                        additional_inputs.append(osint_industry)
+                        additional_inputs.append(osint_depth)
+                        additional_inputs.append(osint_constraints)
+                        
+                        # Model selection removed from chat - use Settings tab instead
+                        # Add hidden dummy component to maintain function signature
+                        model_dropdown = gr.Textbox(value="", visible=False)
+                        additional_inputs.append(model_dropdown)
                         
                         # Open Deep Research checkbox (must be last to match function signature)
                         if OPEN_DEEP_RESEARCH_AVAILABLE:
@@ -2075,28 +2544,13 @@ def main():
                             additional_inputs.append(use_odr)
                         
                         # Create ChatInterface
-                        # When using additional_inputs, examples must be lists of lists
-                        # Each example is [message, file1, file2, ..., image1, image2, ..., model]
-                        examples_list = []
-                        if additional_inputs:
-                            # Simple examples without additional inputs
-                            examples_list = [
-                                ["Search PubMed for microsampling publications"] + [None] * len(additional_inputs),
-                                ["Find researchers working on microsampling"] + [None] * len(additional_inputs),
-                                ["Generate a researcher register"] + [None] * len(additional_inputs),
-                            ]
-                        else:
-                            examples_list = [
-                                "Search PubMed for microsampling publications",
-                                "Find researchers working on microsampling",
-                                "Generate a researcher register",
-                            ]
-                        
+                        # Completely remove examples - don't pass the parameter at all
+                        # This prevents Gradio from auto-generating examples when additional_inputs are used
                         chat_interface = gr.ChatInterface(
                             fn=chat_fn,
-                            title="",
-                            description="Chat with the multi-agent system",
-                            examples=examples_list if additional_inputs else examples_list,
+                            title="💬 Chat with IntelCore Agents",
+                            description="Ask questions, request OSINT research, or analyze uploaded files. The agents will work together to provide comprehensive, evidence-backed answers.",
+                            # examples parameter omitted entirely to prevent any examples from being generated
                             additional_inputs=additional_inputs if additional_inputs else None,
                         )
                         # Note: ChatInterface renders automatically, no need to call .render()
@@ -2104,7 +2558,7 @@ def main():
                         gr.Markdown("Agents will be available after initialization.")
             
             # Startup Checks Tab
-            with gr.Tab("Startup Checks"):
+            with gr.Tab("🔧 Startup Checks"):
                 # Create startup interface content directly in tab
                 startup_result_state = gr.State(value=startup_result)
                 startup_config_state = gr.State(value=config)
@@ -2302,81 +2756,6 @@ def main():
                     outputs=[programming_model_dropdown, manager_model_dropdown, vision_info]
                 )
             
-            # Health Check Tab
-            with gr.Tab("Health Check"):
-                health_output = gr.Markdown()
-                
-                def run_health_check():
-                    """Run health check and display results."""
-                    config = StartupConfig()
-                    result = run_startup_checks(config)
-                    
-                    # Format comprehensive health report
-                    report_lines = []
-                    report_lines.append("# 🏥 System Health Check Report\n")
-                    report_lines.append(f"**Overall Status:** {'✅ All systems operational' if result.all_critical_services_ready else '⚠️ Some issues detected'}\n")
-                    
-                    # Ollama Status
-                    report_lines.append("\n## 🦙 Ollama")
-                    if result.ollama["available"]:
-                        report_lines.append("✅ **Status:** Running")
-                        if result.ollama.get("version"):
-                            report_lines.append(f"**Version:** {result.ollama['version']}")
-                        report_lines.append(f"**Models Available:** {len(result.ollama['models'])}")
-                        if result.ollama.get("gpu_available"):
-                            report_lines.append(f"**GPU:** ✅ {result.ollama.get('gpu_info', 'Available')}")
-                        else:
-                            report_lines.append("**GPU:** ⚠️ Not detected")
-                    else:
-                        report_lines.append("❌ **Status:** Not available")
-                        if result.ollama.get("error"):
-                            report_lines.append(f"**Error:** {result.ollama['error']}")
-                    
-                    # Qdrant Status
-                    report_lines.append("\n## 🗄️ Qdrant")
-                    if result.qdrant["available"]:
-                        report_lines.append("✅ **Status:** Running")
-                        report_lines.append(f"**URL:** {result.qdrant.get('url', 'N/A')}:{result.qdrant.get('port', 'N/A')}")
-                        report_lines.append(f"**Collections:** {len([c for c, found in result.qdrant.get('required_collections', {}).items() if found])} available")
-                    else:
-                        report_lines.append("❌ **Status:** Not available")
-                        if result.qdrant.get("error"):
-                            report_lines.append(f"**Error:** {result.qdrant['error']}")
-                    
-                    # SQLite Status
-                    report_lines.append("\n## 💾 SQLite")
-                    if result.sqlite["available"]:
-                        report_lines.append("✅ **Status:** Running")
-                        report_lines.append(f"**Database:** {result.sqlite.get('db_path', 'N/A')}")
-                        report_lines.append(f"**Tables:** {len([t for t, found in result.sqlite.get('required_tables', {}).items() if found])} available")
-                    else:
-                        report_lines.append("❌ **Status:** Not available")
-                        if result.sqlite.get("error"):
-                            report_lines.append(f"**Error:** {result.sqlite['error']}")
-                    
-                    # Warnings and Errors
-                    if result.warnings:
-                        report_lines.append("\n## ⚠️ Warnings")
-                        for warning in result.warnings:
-                            report_lines.append(f"- {warning}")
-                    
-                    if result.errors:
-                        report_lines.append("\n## ❌ Errors")
-                        for error in result.errors:
-                            report_lines.append(f"- {error}")
-                    
-                    if not result.warnings and not result.errors:
-                        report_lines.append("\n## ✅ No Issues")
-                        report_lines.append("All systems are operating normally.")
-                    
-                    return "\n".join(report_lines)
-                
-                health_btn = gr.Button("🔄 Run Health Check", variant="primary")
-                health_btn.click(fn=run_health_check, outputs=[health_output])
-                
-                # Run on load
-                main_ui.load(fn=run_health_check, outputs=[health_output])
-    
     # Launch with theme
     # Use environment variable for port if set, otherwise try to find an available port
     import socket
@@ -2405,7 +2784,12 @@ def main():
             server_name="0.0.0.0",
             server_port=port,
             share=False,
-            theme=gr.themes.Soft(),
+            theme=gr.themes.Soft(
+                primary_hue="purple",
+                secondary_hue="blue",
+                neutral_hue="slate",
+            ),
+            css=custom_css,
             prevent_thread_lock=False,  # Ensure the server blocks
         )
         print("[DEBUG] launch() returned - this means server stopped")

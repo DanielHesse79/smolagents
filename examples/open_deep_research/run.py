@@ -16,7 +16,7 @@ from scripts.text_web_browser import (
 )
 from scripts.visual_qa import visualizer
 
-from smolagents import (
+from intelcore import (
     CodeAgent,
     GoogleSearchTool,
     # InferenceClientModel,
